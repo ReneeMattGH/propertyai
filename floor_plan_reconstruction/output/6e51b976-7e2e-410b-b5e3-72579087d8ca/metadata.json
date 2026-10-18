@@ -1,0 +1,9 @@
+{
+  "job_id": "6e51b976-7e2e-410b-b5e3-72579087d8ca",
+  "format": "obj",
+  "vertices": 24,
+  "faces": 12,
+  "num_floors": 1,
+  "floor_height": 2.8,
+  "collision_available": true
+}

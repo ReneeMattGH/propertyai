@@ -1,0 +1,71 @@
+{
+  "total_photos": 4,
+  "analyzed_photos": 4,
+  "room_assignments": {
+    "living_room": [
+      "photo_0_test_living_room.jpg",
+      "photo_1_test_kitchen.jpg",
+      "photo_2_test_bedroom.jpg",
+      "photo_3_test_bathroom.jpg"
+    ]
+  },
+  "unassigned_photos": [],
+  "photo_features": {
+    "photo_0_test_living_room.jpg": {
+      "width": 640,
+      "height": 480,
+      "aspect_ratio": 1.3333333333333333,
+      "brightness": 165.25163194444445,
+      "contrast": 37.83126355998555,
+      "dominant_colors": [
+        [
+          185,
+          165,
+          145
+        ]
+      ]
+    },
+    "photo_1_test_kitchen.jpg": {
+      "width": 640,
+      "height": 480,
+      "aspect_ratio": 1.3333333333333333,
+      "brightness": 188.58279513888888,
+      "contrast": 30.51556382979664,
+      "dominant_colors": [
+        [
+          195,
+          193,
+          173
+        ]
+      ]
+    },
+    "photo_2_test_bedroom.jpg": {
+      "width": 640,
+      "height": 480,
+      "aspect_ratio": 1.3333333333333333,
+      "brightness": 157.81080186631945,
+      "contrast": 26.410213407921862,
+      "dominant_colors": [
+        [
+          156,
+          136,
+          178
+        ]
+      ]
+    },
+    "photo_3_test_bathroom.jpg": {
+      "width": 640,
+      "height": 480,
+      "aspect_ratio": 1.3333333333333333,
+      "brightness": 214.23992404513888,
+      "contrast": 20.392336359502604,
+      "dominant_colors": [
+        [
+          194,
+          214,
+          233
+        ]
+      ]
+    }
+  }
+}

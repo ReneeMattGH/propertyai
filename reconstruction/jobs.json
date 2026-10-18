@@ -1,0 +1,54 @@
+{
+  "ff0197e8-e093-42a6-ae0f-fbab965a22e3": {
+    "id": "ff0197e8-e093-42a6-ae0f-fbab965a22e3",
+    "status": "pending",
+    "current_stage": "pending",
+    "progress": 0.0,
+    "created_at": "2026-10-17T17:00:00.997259",
+    "updated_at": "2026-10-17T17:00:00.997267",
+    "error": null,
+    "video_filename": "test_property.mp4",
+    "description": "Test synthetic room video",
+    "frame_count": null,
+    "duration": null,
+    "resolution": null,
+    "diagnostics": {},
+    "assets": []
+  },
+  "99a8322f-f912-4128-8eea-f51cede4b15f": {
+    "id": "99a8322f-f912-4128-8eea-f51cede4b15f",
+    "status": "completed",
+    "current_stage": "completed",
+    "progress": 100,
+    "created_at": "2026-10-17T17:01:03.278067",
+    "updated_at": "2026-10-17T17:01:03.409847",
+    "error": null,
+    "video_filename": "test_property.mp4",
+    "description": "Test synthetic room video",
+    "frame_count": 150,
+    "duration": 5.0,
+    "resolution": "640x480",
+    "diagnostics": {
+      "export": {
+        "status": "skipped",
+        "reason": "Training did not complete",
+        "training_status": "skipped"
+      }
+    },
+    "assets": [],
+    "quality_report": {
+      "sampled_frames": 10,
+      "total_frames": 10,
+      "avg_sharpness": 1088.3458393606322,
+      "avg_brightness": 116.81262011718749,
+      "avg_edge_density": 0.0020904947916666667,
+      "quality_score": 85,
+      "warnings": [
+        "Low edge density (0.0021). May indicate low texture or motion blur."
+      ],
+      "recommendation": "suitable"
+    },
+    "navigation_available": false,
+    "limitations": []
+  }
+}

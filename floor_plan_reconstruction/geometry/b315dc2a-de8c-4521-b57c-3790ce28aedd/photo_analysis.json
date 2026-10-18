@@ -1,0 +1,90 @@
+{
+  "total_photos": 5,
+  "analyzed_photos": 5,
+  "room_assignments": {
+    "bedroom": [
+      "photo_0_Screenshot 2026-10-18 at 5.50.19\u202fPM.png",
+      "photo_3_Screenshot 2026-10-18 at 5.51.20\u202fPM.png",
+      "photo_4_Screenshot 2026-10-18 at 5.51.32\u202fPM.png"
+    ],
+    "unknown": [
+      "photo_1_Screenshot 2026-10-18 at 5.50.32\u202fPM.png"
+    ],
+    "living_room": [
+      "photo_2_Screenshot 2026-10-18 at 5.50.44\u202fPM.png"
+    ]
+  },
+  "unassigned_photos": [],
+  "photo_features": {
+    "photo_0_Screenshot 2026-10-18 at 5.50.19\u202fPM.png": {
+      "width": 1200,
+      "height": 782,
+      "aspect_ratio": 1.5345268542199488,
+      "brightness": 128.40787830349532,
+      "contrast": 58.81995016784375,
+      "dominant_colors": [
+        [
+          117,
+          133,
+          141
+        ]
+      ]
+    },
+    "photo_1_Screenshot 2026-10-18 at 5.50.32\u202fPM.png": {
+      "width": 1190,
+      "height": 790,
+      "aspect_ratio": 1.5063291139240507,
+      "brightness": 97.2287136120271,
+      "contrast": 60.4865783937044,
+      "dominant_colors": [
+        [
+          85,
+          95,
+          100
+        ]
+      ]
+    },
+    "photo_2_Screenshot 2026-10-18 at 5.50.44\u202fPM.png": {
+      "width": 1196,
+      "height": 790,
+      "aspect_ratio": 1.5139240506329115,
+      "brightness": 153.08540211393816,
+      "contrast": 54.15801775148795,
+      "dominant_colors": [
+        [
+          148,
+          155,
+          159
+        ]
+      ]
+    },
+    "photo_3_Screenshot 2026-10-18 at 5.51.20\u202fPM.png": {
+      "width": 1198,
+      "height": 790,
+      "aspect_ratio": 1.5164556962025317,
+      "brightness": 145.92954185245452,
+      "contrast": 55.00897078633348,
+      "dominant_colors": [
+        [
+          138,
+          144,
+          153
+        ]
+      ]
+    },
+    "photo_4_Screenshot 2026-10-18 at 5.51.32\u202fPM.png": {
+      "width": 1196,
+      "height": 784,
+      "aspect_ratio": 1.5255102040816326,
+      "brightness": 106.81126394955976,
+      "contrast": 56.54926639427842,
+      "dominant_colors": [
+        [
+          85,
+          105,
+          118
+        ]
+      ]
+    }
+  }
+}

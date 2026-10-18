@@ -1,0 +1,185 @@
+{
+  "status": "completed",
+  "geometry_valid": true,
+  "collision_valid": true,
+  "connectivity_valid": true,
+  "navigation_available": true,
+  "mesh_valid": true,
+  "gaps_detected": 24,
+  "scale_verified": false,
+  "validation_details": {
+    "mesh": true,
+    "collision": true,
+    "connectivity": true,
+    "gaps": [
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          0,
+          1
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          1,
+          2
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          2,
+          3
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          0,
+          3
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          4,
+          5
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          5,
+          6
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          6,
+          7
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          4,
+          7
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          8,
+          9
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          9,
+          10
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          10,
+          11
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          8,
+          11
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          12,
+          13
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          13,
+          14
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          14,
+          15
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          12,
+          15
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          16,
+          17
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          17,
+          18
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          18,
+          19
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          16,
+          19
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          20,
+          21
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          21,
+          22
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          22,
+          23
+        ]
+      },
+      {
+        "type": "non_manifold_edge",
+        "edge": [
+          20,
+          23
+        ]
+      }
+    ]
+  }
+}

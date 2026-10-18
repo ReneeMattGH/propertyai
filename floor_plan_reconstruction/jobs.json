@@ -1,0 +1,4603 @@
+{
+  "34e9e528-c981-47b2-97cc-a93da4d39d02": {
+    "id": "34e9e528-c981-47b2-97cc-a93da4d39d02",
+    "status": "failed",
+    "current_stage": "parsing_floor_plan",
+    "progress": 15,
+    "created_at": "2026-10-17T17:18:10.523641",
+    "updated_at": "2026-10-17T17:18:20.741762",
+    "error": "cannot unpack non-iterable numpy.int32 object\nTraceback (most recent call last):\n  File \"/Users/reneematthew/Downloads/realestai/floor_plan_reconstruction/main.py\", line 385, in run_reconstruction_pipeline\n    floor_plan_result = await floor_plan_parser.parse_floor_plan(\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        job_id, floor_plan_path, known_width, known_length\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/reneematthew/Downloads/realestai/floor_plan_reconstruction/floor_plan_parser.py\", line 144, in parse_floor_plan\n    x1, y1, x2, y2 = line[0]\n    ^^^^^^^^^^^^^^\nTypeError: cannot unpack non-iterable numpy.int32 object\n",
+    "project_name": "Test House",
+    "floor_plan_filename": "test_floor_plan.png",
+    "photo_count": 4,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 10.0,
+      "length_meters": 8.0
+    },
+    "diagnostics": {
+      "validation": {
+        "floor_plan_valid": true,
+        "photos_valid": true,
+        "floor_plan_size": 23558,
+        "photo_count": 4,
+        "errors": [],
+        "valid_photo_count": 4
+      }
+    },
+    "assets": []
+  },
+  "0a0d4904-1898-42f6-8319-8fa4d4aac877": {
+    "id": "0a0d4904-1898-42f6-8319-8fa4d4aac877",
+    "status": "failed",
+    "current_stage": "exporting",
+    "progress": 99,
+    "created_at": "2026-10-17T17:19:26.521645",
+    "updated_at": "2026-10-17T17:19:27.016794",
+    "error": "'vertices_count'\nTraceback (most recent call last):\n  File \"/Users/reneematthew/Downloads/realestai/floor_plan_reconstruction/main.py\", line 420, in run_reconstruction_pipeline\n    export_result = await geometry_builder.export_scene(job_id, geometry_result)\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/reneematthew/Downloads/realestai/floor_plan_reconstruction/geometry_builder.py\", line 303, in export_scene\n    \"vertices\": geometry_result[\"mesh_data\"][\"vertices_count\"],\n                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^\nKeyError: 'vertices_count'\n",
+    "project_name": "Test House",
+    "floor_plan_filename": "test_floor_plan.png",
+    "photo_count": 4,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 10.0,
+      "length_meters": 8.0
+    },
+    "diagnostics": {
+      "validation": {
+        "status": "completed",
+        "geometry_valid": true,
+        "collision_valid": true,
+        "connectivity_valid": true,
+        "navigation_available": true,
+        "mesh_valid": true,
+        "gaps_detected": 24,
+        "scale_verified": false,
+        "validation_details": {
+          "mesh": true,
+          "collision": true,
+          "connectivity": true,
+          "gaps": [
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                1
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                1,
+                2
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                2,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                5
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                5,
+                6
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                6,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                9
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                9,
+                10
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                10,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                13
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                13,
+                14
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                14,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                17
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                17,
+                18
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                18,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                21
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                21,
+                22
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                22,
+                23
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                23
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "assets": [],
+    "geometry_valid": true,
+    "navigation_available": true,
+    "scale_verified": false
+  },
+  "1b2b4b97-ab89-4349-a3db-efe4c1945dbc": {
+    "id": "1b2b4b97-ab89-4349-a3db-efe4c1945dbc",
+    "status": "completed",
+    "current_stage": "completed",
+    "progress": 100,
+    "created_at": "2026-10-17T17:20:57.356310",
+    "updated_at": "2026-10-17T17:20:57.837316",
+    "error": null,
+    "project_name": "Test House",
+    "floor_plan_filename": "test_floor_plan.png",
+    "photo_count": 4,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 10.0,
+      "length_meters": 8.0
+    },
+    "diagnostics": {
+      "validation": {
+        "status": "completed",
+        "geometry_valid": true,
+        "collision_valid": true,
+        "connectivity_valid": true,
+        "navigation_available": true,
+        "mesh_valid": true,
+        "gaps_detected": 24,
+        "scale_verified": false,
+        "validation_details": {
+          "mesh": true,
+          "collision": true,
+          "connectivity": true,
+          "gaps": [
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                1
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                1,
+                2
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                2,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                5
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                5,
+                6
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                6,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                9
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                9,
+                10
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                10,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                13
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                13,
+                14
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                14,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                17
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                17,
+                18
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                18,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                21
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                21,
+                22
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                22,
+                23
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                23
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "assets": [
+      "scene.obj",
+      "metadata.json"
+    ],
+    "geometry_valid": true,
+    "navigation_available": true,
+    "scale_verified": false,
+    "limitations": [
+      "Textures not applied - using basic colors",
+      "Camera poses not estimated - photos not projected",
+      "Doorways not explicitly modeled - walls are solid",
+      "Stairs not generated - only basic floor stacking"
+    ]
+  },
+  "b45039cc-54c3-46e0-b35d-b4b88008ddd7": {
+    "id": "b45039cc-54c3-46e0-b35d-b4b88008ddd7",
+    "status": "completed",
+    "current_stage": "completed",
+    "progress": 100,
+    "created_at": "2026-10-17T17:36:28.873022",
+    "updated_at": "2026-10-17T17:36:29.500658",
+    "error": null,
+    "project_name": "Test House Fixed",
+    "floor_plan_filename": "test_floor_plan.png",
+    "photo_count": 4,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 10.0,
+      "length_meters": 8.0
+    },
+    "diagnostics": {
+      "validation": {
+        "status": "completed",
+        "geometry_valid": true,
+        "collision_valid": true,
+        "connectivity_valid": true,
+        "navigation_available": true,
+        "mesh_valid": true,
+        "gaps_detected": 24,
+        "scale_verified": false,
+        "validation_details": {
+          "mesh": true,
+          "collision": true,
+          "connectivity": true,
+          "gaps": [
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                1
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                1,
+                2
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                2,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                5
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                5,
+                6
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                6,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                9
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                9,
+                10
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                10,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                13
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                13,
+                14
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                14,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                17
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                17,
+                18
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                18,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                21
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                21,
+                22
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                22,
+                23
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                23
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "assets": [
+      "scene.obj",
+      "metadata.json"
+    ],
+    "geometry_valid": true,
+    "navigation_available": true,
+    "scale_verified": false,
+    "limitations": [
+      "Textures not applied - using basic colors",
+      "Camera poses not estimated - photos not projected",
+      "Doorways not explicitly modeled - walls are solid",
+      "Stairs not generated - only basic floor stacking"
+    ]
+  },
+  "6e51b976-7e2e-410b-b5e3-72579087d8ca": {
+    "id": "6e51b976-7e2e-410b-b5e3-72579087d8ca",
+    "status": "completed",
+    "current_stage": "completed",
+    "progress": 100,
+    "created_at": "2026-10-17T17:39:45.554465",
+    "updated_at": "2026-10-17T17:39:45.902953",
+    "error": null,
+    "project_name": "213 Main road",
+    "floor_plan_filename": "Screenshot 2026-10-17 at 5.38.20\u202fPM.png",
+    "photo_count": 5,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 1750.0,
+      "length_meters": 1500.0
+    },
+    "diagnostics": {
+      "validation": {
+        "status": "completed",
+        "geometry_valid": true,
+        "collision_valid": true,
+        "connectivity_valid": true,
+        "navigation_available": true,
+        "mesh_valid": true,
+        "gaps_detected": 24,
+        "scale_verified": false,
+        "validation_details": {
+          "mesh": true,
+          "collision": true,
+          "connectivity": true,
+          "gaps": [
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                1
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                1,
+                2
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                2,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                5
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                5,
+                6
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                6,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                9
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                9,
+                10
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                10,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                13
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                13,
+                14
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                14,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                17
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                17,
+                18
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                18,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                21
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                21,
+                22
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                22,
+                23
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                23
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "assets": [
+      "scene.obj",
+      "metadata.json"
+    ],
+    "geometry_valid": true,
+    "navigation_available": true,
+    "scale_verified": false,
+    "limitations": [
+      "Textures not applied - using basic colors",
+      "Camera poses not estimated - photos not projected",
+      "Doorways not explicitly modeled - walls are solid",
+      "Stairs not generated - only basic floor stacking"
+    ]
+  },
+  "6f943b8b-239c-48cf-8bcd-e1be7ec0556e": {
+    "id": "6f943b8b-239c-48cf-8bcd-e1be7ec0556e",
+    "status": "failed",
+    "current_stage": "building_geometry",
+    "progress": 55,
+    "created_at": "2026-10-18T16:24:44.376319",
+    "updated_at": "2026-10-18T16:24:45.952678",
+    "error": "GeometryBuilder._create_wall_with_doorway() missing 1 required positional argument: 'doorway'\nTraceback (most recent call last):\n  File \"/Users/reneematthew/Downloads/realestai/floor_plan_reconstruction/main.py\", line 429, in run_reconstruction_pipeline\n    geometry_result = await geometry_builder.build_geometry(\n                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        job_id, floor_plan_result, photo_result, num_floors\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/reneematthew/Downloads/realestai/floor_plan_reconstruction/geometry_builder.py\", line 50, in build_geometry\n    mesh_data = self._create_floor_plan_mesh(\n        rooms, wall_segments, scale, num_floors, doorways\n    )\n  File \"/Users/reneematthew/Downloads/realestai/floor_plan_reconstruction/geometry_builder.py\", line 144, in _create_floor_plan_mesh\n    self._create_wall_with_doorway(\n    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        vertices, faces, x_m, floor_y, y_m, x_m + w_m, y_m,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        floor_height, door_height, door_width, \"horizontal\", front_doorway\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\nTypeError: GeometryBuilder._create_wall_with_doorway() missing 1 required positional argument: 'doorway'\n",
+    "project_name": "Test House Improved",
+    "floor_plan_filename": "test_floor_plan.png",
+    "photo_count": 4,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 10.0,
+      "length_meters": 8.0
+    },
+    "diagnostics": {
+      "photos": {
+        "total_photos": 4,
+        "analyzed_photos": 4,
+        "room_assignments": {
+          "living_room": [
+            "photo_0_test_living_room.jpg",
+            "photo_1_test_kitchen.jpg",
+            "photo_2_test_bedroom.jpg",
+            "photo_3_test_bathroom.jpg"
+          ]
+        },
+        "unassigned_photos": [],
+        "photo_features": {
+          "photo_0_test_living_room.jpg": {
+            "width": 640,
+            "height": 480,
+            "aspect_ratio": 1.3333333333333333,
+            "brightness": 165.25163194444445,
+            "contrast": 37.83126355998555,
+            "dominant_colors": [
+              [
+                185,
+                165,
+                145
+              ]
+            ]
+          },
+          "photo_1_test_kitchen.jpg": {
+            "width": 640,
+            "height": 480,
+            "aspect_ratio": 1.3333333333333333,
+            "brightness": 188.58279513888888,
+            "contrast": 30.51556382979664,
+            "dominant_colors": [
+              [
+                195,
+                193,
+                173
+              ]
+            ]
+          },
+          "photo_2_test_bedroom.jpg": {
+            "width": 640,
+            "height": 480,
+            "aspect_ratio": 1.3333333333333333,
+            "brightness": 157.81080186631945,
+            "contrast": 26.410213407921862,
+            "dominant_colors": [
+              [
+                156,
+                136,
+                178
+              ]
+            ]
+          },
+          "photo_3_test_bathroom.jpg": {
+            "width": 640,
+            "height": 480,
+            "aspect_ratio": 1.3333333333333333,
+            "brightness": 214.23992404513888,
+            "contrast": 20.392336359502604,
+            "dominant_colors": [
+              [
+                194,
+                214,
+                233
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "assets": []
+  },
+  "3a74e8be-2aab-4d8a-93a4-f534801b4761": {
+    "id": "3a74e8be-2aab-4d8a-93a4-f534801b4761",
+    "status": "completed",
+    "current_stage": "completed",
+    "progress": 100,
+    "created_at": "2026-10-18T16:37:32.779312",
+    "updated_at": "2026-10-18T16:37:34.451051",
+    "error": null,
+    "project_name": "Test House Improved",
+    "floor_plan_filename": "test_floor_plan.png",
+    "photo_count": 4,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 10.0,
+      "length_meters": 8.0
+    },
+    "diagnostics": {
+      "validation": {
+        "status": "completed",
+        "geometry_valid": true,
+        "collision_valid": true,
+        "connectivity_valid": true,
+        "navigation_available": true,
+        "mesh_valid": true,
+        "gaps_detected": 24,
+        "scale_verified": false,
+        "validation_details": {
+          "mesh": true,
+          "collision": true,
+          "connectivity": true,
+          "gaps": [
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                1
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                1,
+                2
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                2,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                5
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                5,
+                6
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                6,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                9
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                9,
+                10
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                10,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                13
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                13,
+                14
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                14,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                17
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                17,
+                18
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                18,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                21
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                21,
+                22
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                22,
+                23
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                23
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "assets": [
+      "scene.glb",
+      "scene.obj",
+      "metadata.json"
+    ],
+    "geometry_valid": true,
+    "navigation_available": true,
+    "scale_verified": false,
+    "limitations": [
+      "Textures not applied - using basic colors",
+      "Camera poses not estimated - photos not projected",
+      "Collision detection in viewer not yet implemented",
+      "Stairs not generated - only basic floor stacking",
+      "No doorways detected - walls are solid"
+    ]
+  },
+  "0f49ba94-59a8-4a9a-a057-58b28129c2db": {
+    "id": "0f49ba94-59a8-4a9a-a057-58b28129c2db",
+    "status": "failed",
+    "current_stage": "building_geometry",
+    "progress": 55,
+    "created_at": "2026-10-18T17:03:13.448584",
+    "updated_at": "2026-10-18T17:03:14.307001",
+    "error": "GeometryBuilder._find_doorway_for_wall() takes 6 positional arguments but 7 were given\nTraceback (most recent call last):\n  File \"/Users/reneematthew/Downloads/realestai/floor_plan_reconstruction/main.py\", line 429, in run_reconstruction_pipeline\n    geometry_result = await geometry_builder.build_geometry(\n                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        job_id, floor_plan_result, photo_result, num_floors\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/reneematthew/Downloads/realestai/floor_plan_reconstruction/geometry_builder.py\", line 50, in build_geometry\n    mesh_data = self._create_floor_plan_mesh(\n        rooms, wall_segments, scale, num_floors, doorways\n    )\n  File \"/Users/reneematthew/Downloads/realestai/floor_plan_reconstruction/geometry_builder.py\", line 141, in _create_floor_plan_mesh\n    front_doorway = self._find_doorway_for_wall(\n        doorways, \"horizontal\", y_m, x_m, x_m + w_m, scale\n    )\nTypeError: GeometryBuilder._find_doorway_for_wall() takes 6 positional arguments but 7 were given\n",
+    "project_name": "Test House Fixed V2",
+    "floor_plan_filename": "test_floor_plan.png",
+    "photo_count": 4,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 10.0,
+      "length_meters": 8.0
+    },
+    "diagnostics": {
+      "photos": {
+        "total_photos": 4,
+        "analyzed_photos": 4,
+        "room_assignments": {
+          "living_room": [
+            "photo_0_test_living_room.jpg",
+            "photo_1_test_kitchen.jpg",
+            "photo_2_test_bedroom.jpg",
+            "photo_3_test_bathroom.jpg"
+          ]
+        },
+        "unassigned_photos": [],
+        "photo_features": {
+          "photo_0_test_living_room.jpg": {
+            "width": 640,
+            "height": 480,
+            "aspect_ratio": 1.3333333333333333,
+            "brightness": 165.25163194444445,
+            "contrast": 37.83126355998555,
+            "dominant_colors": [
+              [
+                183,
+                164,
+                144
+              ]
+            ]
+          },
+          "photo_1_test_kitchen.jpg": {
+            "width": 640,
+            "height": 480,
+            "aspect_ratio": 1.3333333333333333,
+            "brightness": 188.58279513888888,
+            "contrast": 30.51556382979664,
+            "dominant_colors": [
+              [
+                195,
+                193,
+                173
+              ]
+            ]
+          },
+          "photo_2_test_bedroom.jpg": {
+            "width": 640,
+            "height": 480,
+            "aspect_ratio": 1.3333333333333333,
+            "brightness": 157.81080186631945,
+            "contrast": 26.410213407921862,
+            "dominant_colors": [
+              [
+                158,
+                138,
+                180
+              ]
+            ]
+          },
+          "photo_3_test_bathroom.jpg": {
+            "width": 640,
+            "height": 480,
+            "aspect_ratio": 1.3333333333333333,
+            "brightness": 214.23992404513888,
+            "contrast": 20.392336359502604,
+            "dominant_colors": [
+              [
+                193,
+                213,
+                233
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "assets": []
+  },
+  "6f33e983-31dc-409b-881f-03770b6a0e2a": {
+    "id": "6f33e983-31dc-409b-881f-03770b6a0e2a",
+    "status": "completed",
+    "current_stage": "completed",
+    "progress": 100,
+    "created_at": "2026-10-18T17:43:23.638741",
+    "updated_at": "2026-10-18T17:43:24.138385",
+    "error": null,
+    "project_name": "Test House Fixed V3",
+    "floor_plan_filename": "test_floor_plan.png",
+    "photo_count": 4,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 10.0,
+      "length_meters": 8.0
+    },
+    "diagnostics": {
+      "validation": {
+        "status": "completed",
+        "geometry_valid": true,
+        "collision_valid": true,
+        "connectivity_valid": true,
+        "navigation_available": true,
+        "mesh_valid": true,
+        "gaps_detected": 96,
+        "scale_verified": false,
+        "validation_details": {
+          "mesh": true,
+          "collision": true,
+          "connectivity": true,
+          "gaps": [
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                1
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                1,
+                2
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                2,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                5
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                5,
+                6
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                6,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                9
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                9,
+                10
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                10,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                13
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                13,
+                14
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                14,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                17
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                17,
+                18
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                18,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                21
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                21,
+                22
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                22,
+                23
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                23
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                24,
+                25
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                25,
+                26
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                26,
+                27
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                24,
+                27
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                28,
+                29
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                29,
+                30
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                30,
+                31
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                28,
+                31
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                32,
+                33
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                33,
+                34
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                34,
+                35
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                32,
+                35
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                36,
+                37
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                37,
+                38
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                38,
+                39
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                36,
+                39
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                40,
+                41
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                41,
+                42
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                42,
+                43
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                40,
+                43
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                44,
+                45
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                45,
+                46
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                46,
+                47
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                44,
+                47
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                48,
+                49
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                49,
+                50
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                50,
+                51
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                48,
+                51
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                52,
+                53
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                53,
+                54
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                54,
+                55
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                52,
+                55
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                56,
+                57
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                57,
+                58
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                58,
+                59
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                56,
+                59
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                60,
+                61
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                61,
+                62
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                62,
+                63
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                60,
+                63
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                64,
+                65
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                65,
+                66
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                66,
+                67
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                64,
+                67
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                68,
+                69
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                69,
+                70
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                70,
+                71
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                68,
+                71
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                72,
+                73
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                73,
+                74
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                74,
+                75
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                72,
+                75
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                76,
+                77
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                77,
+                78
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                78,
+                79
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                76,
+                79
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                80,
+                81
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                81,
+                82
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                82,
+                83
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                80,
+                83
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                84,
+                85
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                85,
+                86
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                86,
+                87
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                84,
+                87
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                88,
+                89
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                89,
+                90
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                90,
+                91
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                88,
+                91
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                92,
+                93
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                93,
+                94
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                94,
+                95
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                92,
+                95
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "assets": [
+      "scene.glb",
+      "scene.obj",
+      "metadata.json"
+    ],
+    "geometry_valid": true,
+    "navigation_available": true,
+    "scale_verified": false,
+    "limitations": [
+      "Textures not applied - using basic colors",
+      "Camera poses not estimated - photos not projected",
+      "Collision detection in viewer not yet implemented",
+      "Stairs not generated - only basic floor stacking",
+      "No doorways detected - walls are solid"
+    ]
+  },
+  "b315dc2a-de8c-4521-b57c-3790ce28aedd": {
+    "id": "b315dc2a-de8c-4521-b57c-3790ce28aedd",
+    "status": "completed",
+    "current_stage": "completed",
+    "progress": 100,
+    "created_at": "2026-10-18T17:52:44.084090",
+    "updated_at": "2026-10-18T17:52:44.255750",
+    "error": null,
+    "project_name": "123 Main Street ",
+    "floor_plan_filename": "Screenshot 2026-10-18 at 5.50.02\u202fPM.png",
+    "photo_count": 5,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 1050.0,
+      "length_meters": 1500.0
+    },
+    "diagnostics": {
+      "validation": {
+        "status": "completed",
+        "geometry_valid": false,
+        "collision_valid": false,
+        "connectivity_valid": false,
+        "navigation_available": false,
+        "mesh_valid": false,
+        "gaps_detected": 0,
+        "scale_verified": false,
+        "validation_details": {
+          "mesh": false,
+          "collision": false,
+          "connectivity": false,
+          "gaps": []
+        }
+      }
+    },
+    "assets": [
+      "scene.obj",
+      "metadata.json"
+    ],
+    "geometry_valid": false,
+    "navigation_available": false,
+    "scale_verified": false,
+    "limitations": [
+      "Textures not applied - using basic colors",
+      "Camera poses not estimated - photos not projected",
+      "Collision detection in viewer not yet implemented",
+      "Stairs not generated - only basic floor stacking",
+      "No doorways detected - walls are solid"
+    ]
+  },
+  "c18bdb03-4448-49cc-b00b-2249d42e466b": {
+    "id": "c18bdb03-4448-49cc-b00b-2249d42e466b",
+    "status": "completed",
+    "current_stage": "completed",
+    "progress": 100,
+    "created_at": "2026-10-18T17:57:54.765541",
+    "updated_at": "2026-10-18T17:57:55.415123",
+    "error": null,
+    "project_name": "Test House Fixed V4",
+    "floor_plan_filename": "test_floor_plan.png",
+    "photo_count": 4,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 10.0,
+      "length_meters": 8.0
+    },
+    "diagnostics": {
+      "validation": {
+        "status": "completed",
+        "geometry_valid": false,
+        "collision_valid": true,
+        "connectivity_valid": true,
+        "navigation_available": false,
+        "mesh_valid": true,
+        "gaps_detected": 96,
+        "scale_verified": false,
+        "validation_details": {
+          "mesh": true,
+          "collision": true,
+          "connectivity": true,
+          "gaps": [
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                1
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                1,
+                2
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                2,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                5
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                5,
+                6
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                6,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                9
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                9,
+                10
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                10,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                13
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                13,
+                14
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                14,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                17
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                17,
+                18
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                18,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                21
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                21,
+                22
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                22,
+                23
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                23
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                24,
+                25
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                25,
+                26
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                26,
+                27
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                24,
+                27
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                28,
+                29
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                29,
+                30
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                30,
+                31
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                28,
+                31
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                32,
+                33
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                33,
+                34
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                34,
+                35
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                32,
+                35
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                36,
+                37
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                37,
+                38
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                38,
+                39
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                36,
+                39
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                40,
+                41
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                41,
+                42
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                42,
+                43
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                40,
+                43
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                44,
+                45
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                45,
+                46
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                46,
+                47
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                44,
+                47
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                48,
+                49
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                49,
+                50
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                50,
+                51
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                48,
+                51
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                52,
+                53
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                53,
+                54
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                54,
+                55
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                52,
+                55
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                56,
+                57
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                57,
+                58
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                58,
+                59
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                56,
+                59
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                60,
+                61
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                61,
+                62
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                62,
+                63
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                60,
+                63
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                64,
+                65
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                65,
+                66
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                66,
+                67
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                64,
+                67
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                68,
+                69
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                69,
+                70
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                70,
+                71
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                68,
+                71
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                72,
+                73
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                73,
+                74
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                74,
+                75
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                72,
+                75
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                76,
+                77
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                77,
+                78
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                78,
+                79
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                76,
+                79
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                80,
+                81
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                81,
+                82
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                82,
+                83
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                80,
+                83
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                84,
+                85
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                85,
+                86
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                86,
+                87
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                84,
+                87
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                88,
+                89
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                89,
+                90
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                90,
+                91
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                88,
+                91
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                92,
+                93
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                93,
+                94
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                94,
+                95
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                92,
+                95
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "assets": [
+      "scene.glb",
+      "scene.obj",
+      "metadata.json"
+    ],
+    "geometry_valid": false,
+    "navigation_available": false,
+    "scale_verified": false,
+    "limitations": [
+      "Textures not applied - using basic colors",
+      "Camera poses not estimated - photos not projected",
+      "Collision detection in viewer not yet implemented",
+      "Stairs not generated - only basic floor stacking",
+      "No doorways detected - walls are solid"
+    ]
+  },
+  "52fcd022-eb7f-4efa-bad7-14640c5e4882": {
+    "id": "52fcd022-eb7f-4efa-bad7-14640c5e4882",
+    "status": "completed",
+    "current_stage": "completed",
+    "progress": 100,
+    "created_at": "2026-10-18T18:01:32.550840",
+    "updated_at": "2026-10-18T18:01:33.279333",
+    "error": null,
+    "project_name": "Test House Fixed V5",
+    "floor_plan_filename": "test_floor_plan.png",
+    "photo_count": 4,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 10.0,
+      "length_meters": 8.0
+    },
+    "diagnostics": {
+      "validation": {
+        "status": "completed",
+        "geometry_valid": false,
+        "collision_valid": true,
+        "connectivity_valid": true,
+        "navigation_available": false,
+        "mesh_valid": true,
+        "gaps_detected": 96,
+        "scale_verified": false,
+        "validation_details": {
+          "mesh": true,
+          "collision": true,
+          "connectivity": true,
+          "gaps": [
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                1
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                1,
+                2
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                2,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                5
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                5,
+                6
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                6,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                9
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                9,
+                10
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                10,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                13
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                13,
+                14
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                14,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                17
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                17,
+                18
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                18,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                21
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                21,
+                22
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                22,
+                23
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                23
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                24,
+                25
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                25,
+                26
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                26,
+                27
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                24,
+                27
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                28,
+                29
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                29,
+                30
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                30,
+                31
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                28,
+                31
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                32,
+                33
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                33,
+                34
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                34,
+                35
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                32,
+                35
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                36,
+                37
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                37,
+                38
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                38,
+                39
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                36,
+                39
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                40,
+                41
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                41,
+                42
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                42,
+                43
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                40,
+                43
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                44,
+                45
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                45,
+                46
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                46,
+                47
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                44,
+                47
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                48,
+                49
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                49,
+                50
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                50,
+                51
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                48,
+                51
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                52,
+                53
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                53,
+                54
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                54,
+                55
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                52,
+                55
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                56,
+                57
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                57,
+                58
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                58,
+                59
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                56,
+                59
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                60,
+                61
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                61,
+                62
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                62,
+                63
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                60,
+                63
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                64,
+                65
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                65,
+                66
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                66,
+                67
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                64,
+                67
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                68,
+                69
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                69,
+                70
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                70,
+                71
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                68,
+                71
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                72,
+                73
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                73,
+                74
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                74,
+                75
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                72,
+                75
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                76,
+                77
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                77,
+                78
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                78,
+                79
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                76,
+                79
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                80,
+                81
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                81,
+                82
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                82,
+                83
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                80,
+                83
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                84,
+                85
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                85,
+                86
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                86,
+                87
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                84,
+                87
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                88,
+                89
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                89,
+                90
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                90,
+                91
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                88,
+                91
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                92,
+                93
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                93,
+                94
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                94,
+                95
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                92,
+                95
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "assets": [
+      "scene.glb",
+      "scene.obj",
+      "metadata.json"
+    ],
+    "geometry_valid": false,
+    "navigation_available": false,
+    "scale_verified": false,
+    "limitations": [
+      "Textures not applied - using basic colors",
+      "Camera poses not estimated - photos not projected",
+      "Collision detection in viewer not yet implemented",
+      "Stairs not generated - only basic floor stacking",
+      "No doorways detected - walls are solid"
+    ]
+  },
+  "1ae85b45-83dd-4e37-91c0-ce6740ae5210": {
+    "id": "1ae85b45-83dd-4e37-91c0-ce6740ae5210",
+    "status": "completed",
+    "current_stage": "completed",
+    "progress": 100,
+    "created_at": "2026-10-18T18:02:58.121682",
+    "updated_at": "2026-10-18T18:02:58.625366",
+    "error": null,
+    "project_name": "Test House Unified",
+    "floor_plan_filename": "test_floor_plan.png",
+    "photo_count": 4,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 10.0,
+      "length_meters": 8.0
+    },
+    "diagnostics": {
+      "validation": {
+        "status": "completed",
+        "geometry_valid": true,
+        "collision_valid": true,
+        "connectivity_valid": true,
+        "navigation_available": true,
+        "mesh_valid": true,
+        "gaps_detected": 24,
+        "scale_verified": false,
+        "validation_details": {
+          "mesh": true,
+          "collision": true,
+          "connectivity": true,
+          "gaps": [
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                1
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                1,
+                2
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                2,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                5
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                5,
+                6
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                6,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                9
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                9,
+                10
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                10,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                13
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                13,
+                14
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                14,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                17
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                17,
+                18
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                18,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                21
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                21,
+                22
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                22,
+                23
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                23
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "assets": [
+      "scene.glb",
+      "scene.obj",
+      "metadata.json"
+    ],
+    "geometry_valid": true,
+    "navigation_available": true,
+    "scale_verified": false,
+    "limitations": [
+      "Textures not applied - using basic colors",
+      "Camera poses not estimated - photos not projected",
+      "Collision detection in viewer not yet implemented",
+      "Stairs not generated - only basic floor stacking",
+      "No doorways detected - walls are solid"
+    ]
+  },
+  "e7c982cc-5103-4f09-b1ea-86d880272bbb": {
+    "id": "e7c982cc-5103-4f09-b1ea-86d880272bbb",
+    "status": "completed",
+    "current_stage": "completed",
+    "progress": 100,
+    "created_at": "2026-10-18T18:05:26.087860",
+    "updated_at": "2026-10-18T18:05:26.267397",
+    "error": null,
+    "project_name": "1234567",
+    "floor_plan_filename": "Screenshot 2026-10-18 at 5.50.02\u202fPM.png",
+    "photo_count": 5,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 1050.0,
+      "length_meters": 1500.0
+    },
+    "diagnostics": {
+      "validation": {
+        "status": "completed",
+        "geometry_valid": true,
+        "collision_valid": true,
+        "connectivity_valid": false,
+        "navigation_available": false,
+        "mesh_valid": true,
+        "gaps_detected": 24,
+        "scale_verified": false,
+        "validation_details": {
+          "mesh": true,
+          "collision": true,
+          "connectivity": false,
+          "gaps": [
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                1
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                1,
+                2
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                2,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                5
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                5,
+                6
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                6,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                9
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                9,
+                10
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                10,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                13
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                13,
+                14
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                14,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                17
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                17,
+                18
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                18,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                21
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                21,
+                22
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                22,
+                23
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                23
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "assets": [
+      "scene.glb",
+      "scene.obj",
+      "metadata.json"
+    ],
+    "geometry_valid": true,
+    "navigation_available": false,
+    "scale_verified": false,
+    "limitations": [
+      "Textures not applied - using basic colors",
+      "Camera poses not estimated - photos not projected",
+      "Collision detection in viewer not yet implemented",
+      "Stairs not generated - only basic floor stacking",
+      "No doorways detected - walls are solid"
+    ]
+  },
+  "d8852a1c-3e0b-4f78-867d-62280d99ea19": {
+    "id": "d8852a1c-3e0b-4f78-867d-62280d99ea19",
+    "status": "completed",
+    "current_stage": "completed",
+    "progress": 100,
+    "created_at": "2026-10-18T18:12:56.664199",
+    "updated_at": "2026-10-18T18:12:56.848775",
+    "error": null,
+    "project_name": "54",
+    "floor_plan_filename": "Screenshot 2026-10-18 at 5.50.02\u202fPM.png",
+    "photo_count": 5,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 1050.0,
+      "length_meters": 1500.0
+    },
+    "diagnostics": {
+      "validation": {
+        "status": "completed",
+        "geometry_valid": true,
+        "collision_valid": true,
+        "connectivity_valid": false,
+        "navigation_available": false,
+        "mesh_valid": true,
+        "gaps_detected": 24,
+        "scale_verified": false,
+        "validation_details": {
+          "mesh": true,
+          "collision": true,
+          "connectivity": false,
+          "gaps": [
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                1
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                1,
+                2
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                2,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                5
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                5,
+                6
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                6,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                9
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                9,
+                10
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                10,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                13
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                13,
+                14
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                14,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                17
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                17,
+                18
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                18,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                21
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                21,
+                22
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                22,
+                23
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                23
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "assets": [
+      "scene.glb",
+      "scene.obj",
+      "metadata.json"
+    ],
+    "geometry_valid": true,
+    "navigation_available": false,
+    "scale_verified": false,
+    "limitations": [
+      "Textures not applied - using basic colors",
+      "Camera poses not estimated - photos not projected",
+      "Collision detection in viewer not yet implemented",
+      "Stairs not generated - only basic floor stacking",
+      "No doorways detected - walls are solid"
+    ]
+  },
+  "bb902c38-7dd6-46dd-9a11-86c94969c297": {
+    "id": "bb902c38-7dd6-46dd-9a11-86c94969c297",
+    "status": "completed",
+    "current_stage": "completed",
+    "progress": 100,
+    "created_at": "2026-10-18T18:19:13.950627",
+    "updated_at": "2026-10-18T18:19:14.633570",
+    "error": null,
+    "project_name": "Real House Test Fixed",
+    "floor_plan_filename": "test_floor_plan.png",
+    "photo_count": 4,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 15.0,
+      "length_meters": 12.0
+    },
+    "diagnostics": {
+      "validation": {
+        "status": "completed",
+        "geometry_valid": true,
+        "collision_valid": true,
+        "connectivity_valid": true,
+        "navigation_available": true,
+        "mesh_valid": true,
+        "gaps_detected": 24,
+        "scale_verified": false,
+        "validation_details": {
+          "mesh": true,
+          "collision": true,
+          "connectivity": true,
+          "gaps": [
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                1
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                1,
+                2
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                2,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                5
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                5,
+                6
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                6,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                9
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                9,
+                10
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                10,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                13
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                13,
+                14
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                14,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                17
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                17,
+                18
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                18,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                21
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                21,
+                22
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                22,
+                23
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                23
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "assets": [
+      "scene.glb",
+      "scene.obj",
+      "metadata.json"
+    ],
+    "geometry_valid": true,
+    "navigation_available": true,
+    "scale_verified": false,
+    "limitations": [
+      "Textures not applied - using basic colors",
+      "Camera poses not estimated - photos not projected",
+      "Collision detection in viewer not yet implemented",
+      "Stairs not generated - only basic floor stacking",
+      "No doorways detected - walls are solid"
+    ]
+  },
+  "ceb53b74-7860-4c46-8e7b-41f66fa8c660": {
+    "id": "ceb53b74-7860-4c46-8e7b-41f66fa8c660",
+    "status": "completed",
+    "current_stage": "completed",
+    "progress": 100,
+    "created_at": "2026-10-18T18:21:13.277685",
+    "updated_at": "2026-10-18T18:21:13.455954",
+    "error": null,
+    "project_name": "123 Main Street ",
+    "floor_plan_filename": "Screenshot 2026-10-18 at 5.50.02\u202fPM.png",
+    "photo_count": 5,
+    "num_floors": 1,
+    "known_dimensions": {
+      "width_meters": 1050.0,
+      "length_meters": 1500.0
+    },
+    "diagnostics": {
+      "validation": {
+        "status": "completed",
+        "geometry_valid": true,
+        "collision_valid": true,
+        "connectivity_valid": false,
+        "navigation_available": false,
+        "mesh_valid": true,
+        "gaps_detected": 24,
+        "scale_verified": false,
+        "validation_details": {
+          "mesh": true,
+          "collision": true,
+          "connectivity": false,
+          "gaps": [
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                1
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                1,
+                2
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                2,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                0,
+                3
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                5
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                5,
+                6
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                6,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                4,
+                7
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                9
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                9,
+                10
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                10,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                8,
+                11
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                13
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                13,
+                14
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                14,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                12,
+                15
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                17
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                17,
+                18
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                18,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                16,
+                19
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                21
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                21,
+                22
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                22,
+                23
+              ]
+            },
+            {
+              "type": "non_manifold_edge",
+              "edge": [
+                20,
+                23
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "assets": [
+      "scene.glb",
+      "scene.obj",
+      "metadata.json"
+    ],
+    "geometry_valid": true,
+    "navigation_available": false,
+    "scale_verified": false,
+    "limitations": [
+      "Textures not applied - using basic colors",
+      "Camera poses not estimated - photos not projected",
+      "Collision detection in viewer not yet implemented",
+      "Stairs not generated - only basic floor stacking",
+      "No doorways detected - walls are solid"
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "job_id": "e7c982cc-5103-4f09-b1ea-86d880272bbb",
+  "format": "glb",
+  "vertices": 24,
+  "faces": 12,
+  "num_floors": 1,
+  "floor_height": 2.8,
+  "doorways_included": 0,
+  "collision_available": true
+}
