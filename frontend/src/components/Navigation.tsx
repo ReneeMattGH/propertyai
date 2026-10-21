@@ -1,46 +1,46 @@
 'use client'
 
 import { createClient } from '@/lib/supabase/client'
+import { useIsClient } from '@/lib/useIsClient'
+import type { User } from '@supabase/supabase-js'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+
+const supabaseConfigured =
+  Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL) &&
+  process.env.NEXT_PUBLIC_SUPABASE_URL !== 'https://placeholder.supabase.co' &&
+  Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) &&
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY !== 'placeholder_anon_key'
 
 export default function Navigation() {
-  const [user, setUser] = useState<any>(null)
-  const [mounted, setMounted] = useState(false)
-  const [supabaseConfigured, setSupabaseConfigured] = useState(false)
+  const [user, setUser] = useState<User | null>(null)
+  const isClient = useIsClient()
   const router = useRouter()
-  
-  // Only create supabase client after component mounts
-  const supabase = mounted ? createClient() : null
+  const supabase = useMemo(
+    () => (isClient && supabaseConfigured ? createClient() : null),
+    [isClient],
+  )
 
   useEffect(() => {
-    setMounted(true)
-    
-    // Check if Supabase is configured
-    const hasUrl = process.env.NEXT_PUBLIC_SUPABASE_URL && 
-                   process.env.NEXT_PUBLIC_SUPABASE_URL !== 'https://placeholder.supabase.co'
-    const hasKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY && 
-                   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY !== 'placeholder_anon_key'
-    setSupabaseConfigured(hasUrl && hasKey)
-    
-    if (!supabase || !supabaseConfigured) return
-
-    const getUser = async () => {
-      try {
-        const { data: { user } } = await supabase.auth.getUser()
-        setUser(user)
-      } catch (error) {
+    if (!supabase) return
+    let active = true
+    supabase.auth
+      .getUser()
+      .then(({ data }) => {
+        if (active) setUser(data.user)
+      })
+      .catch((error: unknown) => {
         console.error('Error getting user:', error)
-      }
-    }
-    getUser()
-
+      })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null)
     })
 
-    return () => subscription.unsubscribe()
+    return () => {
+      active = false
+      subscription.unsubscribe()
+    }
   }, [supabase])
 
   const handleSignOut = async () => {
@@ -66,10 +66,10 @@ export default function Navigation() {
                 Dashboard
               </Link>
               <Link
-                href="/properties"
+                href="/tours"
                 className="border-transparent text-gray-300 hover:border-gray-500 hover:text-white inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
               >
-                Properties
+                Tours
               </Link>
               <Link
                 href="/create-tour"

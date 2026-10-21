@@ -11,25 +11,26 @@ export default function Home() {
         <section className="pt-20 pb-32 px-4 sm:px-6 lg:px-8">
           <div className="max-w-7xl mx-auto text-center">
             <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold text-white mb-6">
-              Transform Property Footage Into
-              <span className="text-blue-500"> Interactive 3D Tours</span>
+              Transform Floor Plans Into
+              <span className="text-blue-500"> Interactive 3D Walkthroughs</span>
             </h1>
             <p className="text-xl text-gray-400 mb-8 max-w-3xl mx-auto">
-              Upload ordinary property videos and generate immersive, navigable 3D experiences.
-              Let buyers explore properties from anywhere, in first-person or third-person mode.
+              Upload a 2D floor plan and interior photos. The engine reconstructs a validated,
+              walkable 3D scene with real scale, collision, and room navigation you can explore
+              in your browser.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Link
-                href="/auth/signup"
+                href="/create-tour"
                 className="bg-blue-600 text-white px-8 py-3 rounded-lg font-medium hover:bg-blue-700 transition-colors"
               >
-                Get Started Free
+                Create a Tour
               </Link>
               <Link
-                href="/properties"
+                href="/tours"
                 className="bg-gray-800 text-white px-8 py-3 rounded-lg font-medium hover:bg-gray-700 transition-colors border border-gray-700"
               >
-                View Demo Tours
+                View Tours
               </Link>
             </div>
           </div>
@@ -46,27 +47,32 @@ export default function Home() {
                 <div className="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center mb-4">
                   <span className="text-white text-xl font-bold">1</span>
                 </div>
-                <h3 className="text-xl font-semibold text-white mb-2">Upload Footage</h3>
+                <h3 className="text-xl font-semibold text-white mb-2">Upload a Floor Plan</h3>
                 <p className="text-gray-400">
-                  Upload property videos or 360-degree images. Our system supports multiple formats and handles large files securely.
+                  Provide a PNG, JPEG, or PDF plan plus interior photos. Supplying the
+                  property width and length makes the reconstructed scale measured rather than estimated.
                 </p>
               </div>
               <div className="bg-gray-900 p-6 rounded-lg">
                 <div className="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center mb-4">
                   <span className="text-white text-xl font-bold">2</span>
                 </div>
-                <h3 className="text-xl font-semibold text-white mb-2">AI Processing</h3>
+                <h3 className="text-xl font-semibold text-white mb-2">Validated Reconstruction</h3>
                 <p className="text-gray-400">
-                  Our AI reconstructs the property in 3D, creating navigable spaces with accurate geometry and textures.
+                  Walls, rooms, and doorways are vectorised, extruded, and exported as GLB.
+                  A job only completes if the scene reloads and passes geometry, collision, and
+                  reachability checks.
                 </p>
               </div>
               <div className="bg-gray-900 p-6 rounded-lg">
                 <div className="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center mb-4">
                   <span className="text-white text-xl font-bold">3</span>
                 </div>
-                <h3 className="text-xl font-semibold text-white mb-2">Share & Explore</h3>
+                <h3 className="text-xl font-semibold text-white mb-2">Walk & Explore</h3>
                 <p className="text-gray-400">
-                  Share interactive tours with buyers. They can explore in first-person mode or switch to game-like third-person navigation.
+                  Move through the property with WASD or arrow keys, mouse-look, and pointer lock,
+                  or use the on-screen joystick and touch-look controls on mobile. Gravity,
+                  collision, and doorways are simulated.
                 </p>
               </div>
             </div>
@@ -89,7 +95,7 @@ export default function Home() {
                 <div>
                   <h3 className="text-lg font-semibold text-white mb-1">Immersive Experience</h3>
                   <p className="text-gray-400">
-                    Game-like navigation with keyboard, mouse, and mobile controls. Buyers feel like they're actually walking through the property.
+                    Game-like navigation with keyboard, mouse, and mobile controls. Buyers feel like they&apos;re actually walking through the property.
                   </p>
                 </div>
               </div>
@@ -100,9 +106,10 @@ export default function Home() {
                   </svg>
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-white mb-1">Easy to Use</h3>
+                  <h3 className="text-lg font-semibold text-white mb-1">Measured Scale</h3>
                   <p className="text-gray-400">
-                    No technical expertise required. Upload your footage and we handle the rest. Tours are ready in hours, not days.
+                    Supply the property width and length to get a measured reconstruction, or let the
+                    engine estimate the scale and warn you when it does.
                   </p>
                 </div>
               </div>
@@ -126,9 +133,10 @@ export default function Home() {
                   </svg>
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-white mb-1">Direct Inquiries</h3>
+                  <h3 className="text-lg font-semibold text-white mb-1">Validation Report</h3>
                   <p className="text-gray-400">
-                    Buyers can contact you directly through the tour. Track inquiries and manage leads in your dashboard.
+                    Every tour exposes its manifest, scale source, GLB integrity, collision, and
+                    doorway checks so you can see exactly what was verified.
                   </p>
                 </div>
               </div>
@@ -140,16 +148,17 @@ export default function Home() {
         <section className="py-20 bg-gray-800">
           <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <h2 className="text-3xl font-bold text-white mb-4">
-              Ready to Transform Your Listings?
+              Ready to Reconstruct a Property?
             </h2>
             <p className="text-xl text-gray-400 mb-8">
-              Join thousands of real estate professionals using RealEstAI to create immersive property experiences.
+              Bring a floor plan and photos. The pipeline handles validation, reconstruction,
+              verification, and the interactive walkthrough.
             </p>
             <Link
-              href="/auth/signup"
+              href="/create-tour"
               className="bg-blue-600 text-white px-8 py-3 rounded-lg font-medium hover:bg-blue-700 transition-colors inline-block"
             >
-              Start Creating Tours Today
+              Start a Reconstruction
             </Link>
           </div>
         </section>

@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useIsClient } from '@/lib/useIsClient'
 import { useRouter } from 'next/navigation'
 import Navigation from '@/components/Navigation'
 
@@ -22,13 +23,9 @@ export default function NewPropertyPage() {
   })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [mounted, setMounted] = useState(false)
+  const isClient = useIsClient()
   const router = useRouter()
-  const supabase = mounted ? createClient() : null
-
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  const supabase = isClient ? createClient() : null
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     setFormData({
@@ -81,8 +78,8 @@ export default function NewPropertyPage() {
 
       const property = await response.json()
       router.push(`/properties/${property.id}`)
-    } catch (err: any) {
-      setError(err.message || 'Failed to create property')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to create property')
       setLoading(false)
     }
   }

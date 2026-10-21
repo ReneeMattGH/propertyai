@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { useIsClient } from '@/lib/useIsClient'
 import Navigation from '@/components/Navigation'
 
 interface Property {
@@ -27,12 +28,8 @@ function PropertyDetailContent() {
   const [property, setProperty] = useState<Property | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [mounted, setMounted] = useState(false)
-  const supabase = mounted ? createClient() : null
-
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  const isClient = useIsClient()
+  const supabase = isClient ? createClient() : null
 
   useEffect(() => {
     if (!supabase) return
@@ -57,8 +54,8 @@ function PropertyDetailContent() {
 
         const data = await response.json()
         setProperty(data)
-      } catch (err: any) {
-        setError(err.message)
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Failed to load property')
       } finally {
         setLoading(false)
       }
@@ -90,8 +87,8 @@ function PropertyDetailContent() {
       }
 
       router.push('/dashboard')
-    } catch (err: any) {
-      setError(err.message)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to delete property')
     }
   }
 

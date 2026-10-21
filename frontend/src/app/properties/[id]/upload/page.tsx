@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useEffect, Suspense } from 'react'
+import { useState, Suspense } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { useIsClient } from '@/lib/useIsClient'
 import Navigation from '@/components/Navigation'
 
 function PropertyUploadContent() {
@@ -14,12 +15,8 @@ function PropertyUploadContent() {
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
-  const [mounted, setMounted] = useState(false)
-  const supabase = mounted ? createClient() : null
-
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  const isClient = useIsClient()
+  const supabase = isClient ? createClient() : null
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -81,14 +78,14 @@ function PropertyUploadContent() {
         throw new Error(errorData.detail || 'Upload failed')
       }
 
-      const result = await response.json()
+      await response.json()
       setSuccess(true)
       
       setTimeout(() => {
         router.push(`/properties/${params.id}`)
       }, 2000)
-    } catch (err: any) {
-      setError(err.message || 'Upload failed')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Upload failed')
       setUploading(false)
       setProgress(0)
     }
@@ -131,7 +128,9 @@ function PropertyUploadContent() {
               <select
                 id="media_type"
                 value={mediaType}
-                onChange={(e) => setMediaType(e.target.value as any)}
+                onChange={(e) =>
+                  setMediaType(e.target.value as 'video' | 'image_360' | 'image_standard')
+                }
                 className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="video">Video (MP4, MOV, AVI)</option>

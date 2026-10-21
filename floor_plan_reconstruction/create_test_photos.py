@@ -86,6 +86,35 @@ def create_test_room_photo(output_path: str, room_type: str):
     print(f"Created test photo: {output_path}")
 
 
+def create_palette_photo(
+    output_path: str,
+    wall_rgb,
+    floor_rgb,
+    accent_rgb,
+    accent_box,
+):
+    """Development fixture: a photo with an explicit palette for a second property."""
+    width, height = 480, 360
+    canvas = np.zeros((height, width, 3), dtype=np.uint8)
+    canvas[:, :] = wall_rgb[::-1]
+    floor_start = int(height * 0.72)
+    canvas[floor_start:, :] = floor_rgb[::-1]
+    x0, y0, x1, y1 = accent_box
+    canvas[y0:y1, x0:x1] = accent_rgb[::-1]
+    cv2.rectangle(
+        canvas,
+        (400, 60),
+        (450, 200),
+        tuple(min(255, channel + 60) for channel in wall_rgb[::-1]),
+        -1,
+    )
+    noise = np.random.randint(-10, 10, (height, width, 3), dtype=np.int16)
+    canvas = np.clip(canvas.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+    if not cv2.imwrite(str(output_path), canvas):
+        raise RuntimeError(f"Could not write photo fixture to {output_path}")
+    print(f"Created palette test photo: {output_path}")
+
+
 if __name__ == "__main__":
     import sys
     sys.path.insert(0, str(Path(__file__).parent))

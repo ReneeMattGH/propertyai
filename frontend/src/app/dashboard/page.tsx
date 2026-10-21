@@ -1,6 +1,7 @@
 'use client'
 
 import { createClient } from '@/lib/supabase/client'
+import { useIsClient } from '@/lib/useIsClient'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -18,15 +19,10 @@ interface Property {
 
 export default function DashboardPage() {
   const router = useRouter()
-  const [user, setUser] = useState<any>(null)
-  const [properties, setProperties] = useState<Property[]>([])
+  const [properties] = useState<Property[]>([])
   const [loading, setLoading] = useState(true)
-  const [mounted, setMounted] = useState(false)
-  const supabase = mounted ? createClient() : null
-
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  const isClient = useIsClient()
+  const supabase = isClient ? createClient() : null
 
   useEffect(() => {
     const loadDashboard = async () => {
@@ -44,10 +40,6 @@ export default function DashboardPage() {
             router.push('/auth/signin')
             return
           }
-          setUser(user)
-        } else {
-          // Demo mode - no authentication required
-          setUser({ email: 'demo@realestai.local', id: 'demo-user' })
         }
 
         // Fetch properties from local reconstruction engine or backend API
@@ -115,7 +107,7 @@ export default function DashboardPage() {
           
           {properties.length === 0 ? (
             <div className="p-12 text-center">
-              <p className="text-gray-400 mb-4">You haven't added any properties yet.</p>
+              <p className="text-gray-400 mb-4">You haven&apos;t added any properties yet.</p>
               <Link
                 href="/properties/new"
                 className="text-blue-400 hover:text-blue-300 font-medium"

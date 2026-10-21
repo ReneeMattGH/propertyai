@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:e2e": "node scripts/e2e-walkthrough.mjs && node scripts/e2e-mobile.mjs && node scripts/e2e-failure-correction.mjs",
+    "test:e2e:correction": "node scripts/e2e-failure-correction.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.9",
@@ -26,7 +29,9 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.4.2",
+    "playwright-core": "^1.64.1",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^3.2.7"
   }
 }

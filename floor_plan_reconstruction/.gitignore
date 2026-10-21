@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+jobs.json
+input/
+floor_plans/
+photos/
+geometry/
+output/
+logs/

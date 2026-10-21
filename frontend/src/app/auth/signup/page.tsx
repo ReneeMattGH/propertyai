@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useIsClient } from '@/lib/useIsClient'
 import { useRouter } from 'next/navigation'
 
 export default function SignUpPage() {
@@ -11,13 +12,9 @@ export default function SignUpPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
-  const [mounted, setMounted] = useState(false)
+  const isClient = useIsClient()
   const router = useRouter()
-  const supabase = mounted ? createClient() : null
-
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  const supabase = isClient ? createClient() : null
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault()

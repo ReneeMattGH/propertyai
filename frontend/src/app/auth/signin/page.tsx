@@ -1,28 +1,24 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useIsClient } from '@/lib/useIsClient'
 import { useRouter } from 'next/navigation'
+
+const supabaseConfigured =
+  Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL) &&
+  process.env.NEXT_PUBLIC_SUPABASE_URL !== 'https://placeholder.supabase.co' &&
+  Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) &&
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY !== 'placeholder_anon_key'
 
 export default function SignInPage() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [mounted, setMounted] = useState(false)
-  const [supabaseConfigured, setSupabaseConfigured] = useState(false)
+  const isClient = useIsClient()
   const router = useRouter()
-  const supabase = mounted ? createClient() : null
-
-  useEffect(() => {
-    setMounted(true)
-    
-    const hasUrl = process.env.NEXT_PUBLIC_SUPABASE_URL && 
-                   process.env.NEXT_PUBLIC_SUPABASE_URL !== 'https://placeholder.supabase.co'
-    const hasKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY && 
-                   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY !== 'placeholder_anon_key'
-    setSupabaseConfigured(hasUrl && hasKey)
-  }, [])
+  const supabase = isClient && supabaseConfigured ? createClient() : null
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -139,7 +135,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 
           <div className="text-center">
             <p className="text-sm text-gray-400">
-              Don't have an account?{' '}
+              Don&apos;t have an account?{' '}
               <a href="/auth/signup" className="font-medium text-blue-400 hover:text-blue-300">
                 Sign up
               </a>
