@@ -6,22 +6,23 @@ Converts parsed floor plan data (pixel space + scale) into a navigable 3D scene:
   * per-room floor and ceiling slabs (extruded from the detected room polygons)
   * thick walls with real doorway openings and lintels above them
   * door thresholds so floors are continuous through openings
-  * axis-aligned collision volumes in metres (for the browser physics)
-  * a room graph with doorway edges and reachability information
-  * a GLB scene whose wall and floor materials are real crops from the
-    uploaded photographs, embedded as textures in the exported asset
+  * original procedural 3D furniture placed deterministically per room type
+  * axis-aligned collision volumes in metres (walls and furniture) for the
+    browser physics
+  * a room graph with doorway edges, reachability and per-room furniture
 
-The layout is constrained by the floor plan; appearance is derived from the
-photos. Sparse structure-from-motion (COLMAP) runs as a separate stage and its
-results are recorded here. Dense image-derived geometry is only used when the
-photogrammetry stage produced one. This is not a measured survey; callers must
-surface the returned limitations to users.
+The layout is constrained by the floor plan; furniture adapts to the detected
+geometry and never moves walls or doorways. Appearance uses neutral PBR
+materials. The optional photo-texture path remains available for legacy jobs but
+is not used by the active floor-plan-only workflow. This is not a measured
+survey; callers must surface the returned limitations to users.
 """
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import json
+import math
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +33,17 @@ import trimesh
 from PIL import Image
 from shapely.geometry import Point, Polygon
 from trimesh.visual import TextureVisuals
+
+from furniture_assets import (
+    ASSETS,
+    STYLES,
+    STYLE_LABELS,
+    asset_spec,
+    build_parts,
+    material_config,
+    pbr_material,
+)
+from furnishing import furniture_collision_items, validate_furnishing
 
 FLOOR_THICKNESS = 0.06
 CEILING_THICKNESS = 0.06
@@ -265,6 +277,8 @@ class GeometryBuilder:
         photo_manifest: Optional[Dict] = None,
         room_metadata: Optional[Dict[int, Dict]] = None,
         use_photo_floor_textures: bool = False,
+        furnishing: Optional[Dict] = None,
+        style: str = "modern",
     ) -> Dict:
         return await asyncio.to_thread(
             self._build_geometry_sync,
@@ -279,6 +293,8 @@ class GeometryBuilder:
             photo_manifest,
             room_metadata,
             use_photo_floor_textures,
+            furnishing,
+            style,
         )
 
     def _build_geometry_sync(
@@ -294,6 +310,8 @@ class GeometryBuilder:
         photo_manifest: Optional[Dict] = None,
         room_metadata: Optional[Dict[int, Dict]] = None,
         use_photo_floor_textures: bool = False,
+        furnishing: Optional[Dict] = None,
+        style: str = "modern",
     ) -> Dict:
         def emit(stage: str):
             if progress_callback is None:
@@ -303,11 +321,14 @@ class GeometryBuilder:
             except Exception:
                 pass
 
-        emit("building_geometry")
+        emit("generating_geometry")
         if floor_plan_result.get("status") != "completed":
             raise GeometryBuildError(
                 floor_plan_result.get("error", "Floor plan did not parse successfully")
             )
+        furnishing = furnishing or {}
+        style = style if style in STYLES else "modern"
+        photo_result = photo_result or {}
         rooms = floor_plan_result.get("rooms", [])
         walls = floor_plan_result.get("wall_segments", [])
         doorways = floor_plan_result.get("doorways", [])
@@ -340,12 +361,22 @@ class GeometryBuilder:
             "Only axis-aligned walls detected in the floor plan are reconstructed."
         )
         limitations.append(
-            "Door leaves, stairs and furniture are not reconstructed. Windows are "
-            "rendered as openings with inferred sill/head heights and tinted glazing."
+            "Door leaves and stairs are not reconstructed. Windows are rendered as "
+            "openings with inferred sill/head heights and tinted glazing."
         )
-        limitations.extend(
-            self._photogrammetry_limitations(photogrammetry, bool(texture_sets))
+        limitations.append(
+            "Furniture is original procedural geometry from a reusable library, placed "
+            "by deterministic rules. It is not a scan or inventory of the property's "
+            "actual furniture."
         )
+        limitations.append(
+            "Decorative pieces (rugs, wall art, mirrors, pendant lights, televisions and "
+            "sink/stove tops) do not add collision so they cannot trap the player."
+        )
+        if photo_manifest is not None or photogrammetry_result:
+            limitations.extend(
+                self._photogrammetry_limitations(photogrammetry, bool(texture_sets))
+            )
         if use_photo_floor_textures:
             limitations.append(
                 "Photo floor textures were explicitly enabled for this job; floor "
@@ -353,8 +384,8 @@ class GeometryBuilder:
             )
         else:
             limitations.append(
-                "Floors and ceilings use neutral or photo-sampled colours; complete room "
-                "photographs are not mapped onto floor or ceiling surfaces."
+                "Floors and ceilings use neutral colours and do not reproduce the "
+                "property's actual floor finish."
             )
 
         palette = photo_result.get("palette", {}) if photo_result else {}
@@ -373,17 +404,37 @@ class GeometryBuilder:
             windows,
             use_photo_floor_textures=use_photo_floor_textures,
         )
+        if furnishing.get("items"):
+            emit("placing_furniture")
+            geometry["furniture"] = self._add_furniture(
+                geometry["scene"], furnishing, style
+            )
+        emit("generating_lighting_materials")
         collision = self._build_collision(
             rooms, walls, doorways, floor_plan_result, windows
         )
         collision = self._apply_collision_metadata(collision, room_metadata)
+        collision["furniture"] = furniture_collision_items(furnishing)
+        collision["furniture_style"] = style
         room_graph = self._build_room_graph(
             rooms,
             doorways,
             collision["spawn"],
             room_metadata,
             job_id,
+            furnishing=furnishing,
         )
+        furnishing_validation = (
+            validate_furnishing(furnishing, rooms, doorways, windows)
+            if furnishing.get("items")
+            else None
+        )
+        if furnishing_validation and not furnishing_validation.get("valid"):
+            raise GeometryBuildError(
+                "Furniture layout failed validation: "
+                + "; ".join(furnishing_validation.get("issues", [])[:5])
+            )
+        emit("validating_navigation_collisions")
 
         window_summary = geometry["summary"]
         unmatched_windows = (
@@ -420,6 +471,8 @@ class GeometryBuilder:
         collision_path.write_text(json.dumps(collision, indent=2))
         graph_path = output_dir / "room_graph.json"
         graph_path.write_text(json.dumps(room_graph, indent=2))
+        if furnishing:
+            (output_dir / "furniture.json").write_text(json.dumps(furnishing, indent=2))
 
         photogrammetry_assets = self._copy_photogrammetry_assets(
             job_id, photogrammetry, output_dir
@@ -447,6 +500,12 @@ class GeometryBuilder:
             "used_for_geometry": False,
         }
 
+        furniture_summary = furnishing.get("summary", {})
+        furniture_validation = furnishing_validation or {
+            "valid": None,
+            "issues": [],
+            "navigation": {},
+        }
         metadata = {
             "job_id": job_id,
             "format": "glb",
@@ -458,7 +517,24 @@ class GeometryBuilder:
             "doorways_included": len(doorways),
             "windows_included": len(windows),
             "collision_available": bool(collision["walls"]),
+            "collision_furniture": len(collision["furniture"]),
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "furnishing": {
+                "style": style,
+                "style_label": STYLE_LABELS.get(style, style),
+                "variant": furnishing.get("variant", 0),
+                "summary": furniture_summary,
+                "validation": furniture_validation,
+                "materials": furnishing.get("materials", material_config(style)),
+                "asset_library": sorted(ASSETS),
+                "placement_rules": {
+                    "anchoring": "walls and room polygons from the parsed floor plan",
+                    "door_clearance_m": 0.85,
+                    "player_radius_m": 0.24,
+                    "walking_grid_m": 0.1,
+                    "deterministic": True,
+                },
+            },
             "method": {
                 "layout": "floor-plan wall vectorisation + room segmentation "
                 "(structural constraint)",
@@ -466,7 +542,11 @@ class GeometryBuilder:
                     "room-confirmed wall texture crops from the uploaded photographs, "
                     "embedded in scene.glb; floors and ceilings are not photo-mapped"
                     if texture_sets
-                    else "neutral materials with colours sampled from the uploaded photographs"
+                    else "neutral room materials plus original procedural PBR furniture"
+                ),
+                "furniture": (
+                    "deterministic constraint-based placement: wall anchoring, doorway "
+                    "clearance, walking-grid connectivity and collision AABBs"
                 ),
                 "textures": texture_summary,
                 "image_reconstruction": {
@@ -476,23 +556,21 @@ class GeometryBuilder:
                 "photogrammetry_used_for_geometry": False,
             },
             "inferred": [
-                "Ceiling height is fixed at 2.8 m and ceilings are not visible in the "
-                "uploaded photographs.",
-                "Photographs are mapped only to the rooms the user confirmed; rooms "
-                "without a confirmed photograph use neutral materials.",
+                "Ceiling height is fixed at 2.8 m.",
+                "Room types are inferred from plan geometry unless confirmed by the user.",
                 "Window sill and head heights are inferred at 0.9 m and 2.1 m; glazing "
                 "is rendered as tinted panes rather than measured window geometry.",
-                "Wall texture crops repeat across large surfaces; they are appearance "
-                "samples, not a photographic survey of every wall.",
+                "Furniture sizes come from a standard library and are not measured from "
+                "the property; placement adapts to the parsed room geometry.",
             ],
-            "room_assignments": [
+            "room_types": [
                 {
                     "room_id": room_id,
-                    "name": metadata.get("name"),
-                    "room_type": metadata.get("room_type"),
-                    "photo_ids": metadata.get("photo_ids", []),
+                    "name": room_metadata.get(room_id, {}).get("name"),
+                    "room_type": room_metadata.get(room_id, {}).get("room_type"),
+                    "source": room_metadata.get(room_id, {}).get("source"),
                 }
-                for room_id, metadata in sorted(room_metadata.items())
+                for room_id in sorted(room_metadata)
             ],
             "scale": {
                 "pixels_per_meter": floor_plan_result.get("scale_pixels_per_meter"),
@@ -503,12 +581,22 @@ class GeometryBuilder:
         }
         (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
 
+        asset_names = ["scene.glb", "collision.json", "room_graph.json", "metadata.json"]
+        if furnishing:
+            asset_names.append("furniture.json")
         assets = build_asset_entries(
             output_dir,
-            ["scene.glb", "collision.json", "room_graph.json", "metadata.json"]
-            + photogrammetry_assets,
+            asset_names + photogrammetry_assets,
         )
-        self._check_geometry(geometry, collision, room_graph)
+        emit("validating_navigation_collisions")
+        self._check_geometry(
+            geometry,
+            collision,
+            room_graph,
+            furnishing=furnishing,
+            furnishing_validation=furnishing_validation,
+        )
+        emit("loading_walkthrough")
 
         return {
             "status": "completed",
@@ -516,7 +604,10 @@ class GeometryBuilder:
             "faces_count": geometry["face_count"],
             "rooms_count": len(rooms),
             "collision_walls": len(collision["walls"]),
+            "collision_furniture": len(collision["furniture"]),
             "room_graph_edges": len(room_graph["edges"]),
+            "furniture_items": len(furnishing.get("items", [])),
+            "furniture_validation": furniture_validation,
             "output_dir": str(output_dir),
             "assets": assets,
             "primary_format": "glb",
@@ -524,6 +615,7 @@ class GeometryBuilder:
             "limitations": limitations,
             "metadata": metadata,
             "geometry": geometry["summary"],
+            "furnishing": furnishing,
             "photogrammetry": sfm_summary,
             "textures": texture_summary,
             "photogrammetry_assets": photogrammetry_assets,
@@ -1164,6 +1256,74 @@ class GeometryBuilder:
         return result
 
     # ------------------------------------------------------------------
+    # Furniture
+    # ------------------------------------------------------------------
+    def _add_furniture(self, scene: trimesh.Scene, furnishing: Dict, style: str) -> Dict:
+        material_cache: Dict[str, object] = {}
+        part_cache: Dict[Tuple[str, str], List] = {}
+        node_count = 0
+        vertex_count = 0
+        face_count = 0
+        per_room: Dict[int, int] = {}
+        for item in furnishing.get("items", []):
+            asset_id = item.get("asset_id")
+            if asset_id not in ASSETS:
+                raise GeometryBuildError(f"Furniture item references unknown asset '{asset_id}'")
+            cache_key = (asset_id, style)
+            if cache_key not in part_cache:
+                part_cache[cache_key] = build_parts(asset_id, style)
+            parts = part_cache[cache_key]
+            rotation_deg = float(item.get("rotation_deg") or 0.0)
+            transform = trimesh.transformations.concatenate_matrices(
+                trimesh.transformations.translation_matrix(item["position"]),
+                trimesh.transformations.rotation_matrix(
+                    math.radians(rotation_deg), [0.0, 1.0, 0.0]
+                ),
+            )
+            lo = np.array([np.inf, np.inf, np.inf])
+            hi = np.array([-np.inf, -np.inf, -np.inf])
+            for part in parts:
+                mesh = part.mesh.copy()
+                mesh.apply_scale(item.get("scale") or [1.0, 1.0, 1.0])
+                mesh.apply_transform(transform)
+                material = material_cache.get(part.material)
+                if material is None:
+                    material = pbr_material(style, part.material)
+                    material_cache[part.material] = material
+                mesh.visual = TextureVisuals(material=material)
+                name = f"Furniture_{item['id']}__{part.name}"
+                scene.add_geometry(mesh, node_name=name, geom_name=name)
+                node_count += 1
+                vertex_count += len(mesh.vertices)
+                face_count += len(mesh.faces)
+                bounds = mesh.bounds
+                if bounds is not None:
+                    lo = np.minimum(lo, bounds[0])
+                    hi = np.maximum(hi, bounds[1])
+            if item.get("collision"):
+                footprint = item["collision_bounds"]
+                tolerance = 0.2
+                if (
+                    lo[0] < footprint["min"][0] - tolerance
+                    or lo[2] < footprint["min"][1] - tolerance
+                    or hi[0] > footprint["max"][0] + tolerance
+                    or hi[2] > footprint["max"][1] + tolerance
+                ):
+                    raise GeometryBuildError(
+                        f"Furniture mesh '{item['id']}' does not match its collision footprint."
+                    )
+            per_room[int(item.get("room_id", -1))] = per_room.get(int(item.get("room_id", -1)), 0) + 1
+        return {
+            "style": style,
+            "nodes": node_count,
+            "vertices": int(vertex_count),
+            "faces": int(face_count),
+            "materials": sorted(material_cache),
+            "items": len(furnishing.get("items", [])),
+            "per_room": {str(room_id): count for room_id, count in sorted(per_room.items())},
+        }
+
+    # ------------------------------------------------------------------
     # Collision and graph
     # ------------------------------------------------------------------
     def _build_collision(
@@ -1318,13 +1478,20 @@ class GeometryBuilder:
         spawn: Dict,
         room_metadata: Optional[Dict[int, Dict]] = None,
         job_id: Optional[str] = None,
+        furnishing: Optional[Dict] = None,
     ) -> Dict:
         room_metadata = room_metadata or {}
+        furniture_by_room = {
+            int(entry["room_id"]): entry
+            for entry in (furnishing or {}).get("rooms", [])
+        }
         nodes = []
         for room in rooms:
             room_id = int(room["id"])
             metadata = room_metadata.get(room_id) or {}
             photo_ids = metadata.get("photo_ids") or []
+            furnish_entry = furniture_by_room.get(room_id) or {}
+            furniture = furnish_entry.get("furniture") or []
             nodes.append(
                 {
                     "id": room_id,
@@ -1334,6 +1501,9 @@ class GeometryBuilder:
                     "bounds": room["bounds_m"],
                     "area_m2": room.get("area_m2"),
                     "polygon": room.get("polygon_m", []),
+                    "furniture": furniture,
+                    "furniture_count": len(furniture),
+                    "furnishing_status": furnish_entry.get("status"),
                     "photo_ids": photo_ids,
                     "photo_count": len(photo_ids),
                     "photos": [
@@ -1389,7 +1559,14 @@ class GeometryBuilder:
     # ------------------------------------------------------------------
     # Validation and export
     # ------------------------------------------------------------------
-    def _check_geometry(self, geometry: Dict, collision: Dict, room_graph: Dict):
+    def _check_geometry(
+        self,
+        geometry: Dict,
+        collision: Dict,
+        room_graph: Dict,
+        furnishing: Optional[Dict] = None,
+        furnishing_validation: Optional[Dict] = None,
+    ):
         scene = geometry["scene"]
         if not scene.geometry:
             raise GeometryBuildError("Generated scene contains no geometry")
@@ -1403,6 +1580,30 @@ class GeometryBuilder:
         span = bounds[1] - bounds[0]
         if span[0] <= 0.5 or span[2] <= 0.5 or span[1] <= 1.0:
             raise GeometryBuildError("Generated scene dimensions are implausible")
+        items = (furnishing or {}).get("items") or []
+        room_entries = (furnishing or {}).get("rooms") or []
+        furnishable = any(entry.get("room_type") != "unknown" for entry in room_entries)
+        if furnishable and not items:
+            raise GeometryBuildError("No furniture was generated for the floor plan")
+        if items:
+            furniture_nodes = [name for name in scene.geometry if name.startswith("Furniture_")]
+            if not furniture_nodes:
+                raise GeometryBuildError("Furniture items exist but no furniture nodes were exported")
+            if furnishing_validation is None or not furnishing_validation.get("valid"):
+                issues = (furnishing_validation or {}).get("issues") or ["validation did not run"]
+                raise GeometryBuildError(
+                    "Furniture validation failed: " + "; ".join(issues[:5])
+                )
+            expected_collision = sum(1 for item in items if item.get("collision"))
+            if len(collision.get("furniture", [])) != expected_collision:
+                raise GeometryBuildError(
+                    "Collision furniture count does not match the placed furniture items"
+                )
+            furnished_rooms = [
+                node for node in room_graph.get("nodes", []) if node.get("furniture_count")
+            ]
+            if not furnished_rooms:
+                raise GeometryBuildError("Room graph contains no furnished rooms")
 
     def _export_glb(self, path: Path, geometry: Dict):
         try:

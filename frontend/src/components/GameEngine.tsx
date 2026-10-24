@@ -5,7 +5,6 @@ import * as THREE from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import {
   downloadSceneAsset,
-  assetUrl,
   fetchJob,
   fetchScene,
   type ReconstructionJob,
@@ -15,6 +14,7 @@ import {
   PITCH_LIMIT,
   PLAYER_RADIUS,
   applyLook,
+  isBlocked,
   moveWithCollision,
   movementVector,
   roomAtPoint,
@@ -48,10 +48,15 @@ interface Runtime {
   keys: Set<string>
   jumpQueued: boolean
   walls: WallBox[]
+  wallCollision: WallBox[]
+  furnitureCollision: WallBox[]
+  furnitureVisible: boolean
+  furnitureCollisionPending: boolean
   footprint?: { width: number; height: number }
   spawn: { position: THREE.Vector3; yaw: number }
   currentRoomId: number | null
   frame: number
+  setFurnitureVisible: (visible: boolean) => void
   reset: () => void
   dispose: () => void
 }
@@ -93,6 +98,24 @@ function findCeilingRoots(model: THREE.Object3D): THREE.Object3D[] {
   return matches
 }
 
+function findFurnitureRoots(model: THREE.Object3D): THREE.Object3D[] {
+  const matches: THREE.Object3D[] = []
+  model.traverse((object) => {
+    if (!object.name.startsWith('Furniture_')) return
+    let ancestorMatches = false
+    let parent = object.parent
+    while (parent) {
+      if (parent.name.startsWith('Furniture_')) {
+        ancestorMatches = true
+        break
+      }
+      parent = parent.parent
+    }
+    if (!ancestorMatches) matches.push(object)
+  })
+  return matches
+}
+
 function assertUsableTextures(model: THREE.Group): void {
   const failed = new Set<string>()
   model.traverse((object) => {
@@ -114,7 +137,7 @@ function assertUsableTextures(model: THREE.Group): void {
   })
   if (failed.size > 0) {
     throw new Error(
-      `The generated scene references photo textures that failed to decode (${[...failed]
+      `The generated scene references textures that failed to decode (${[...failed]
         .slice(0, 5)
         .join(', ')}). The walkthrough was stopped instead of showing blank or unrelated materials. Retry the reconstruction.`,
     )
@@ -140,11 +163,11 @@ export default function GameEngine({ jobId }: GameEngineProps) {
     coarsePointerServerSnapshot,
   )
   const [ceilingVisible, setCeilingVisible] = useState(true)
+  const [furnitureVisible, setFurnitureVisible] = useState(true)
   const [quality, setQuality] = useState<Quality>('medium')
   const [helpOpen, setHelpOpen] = useState(false)
   const [fps, setFps] = useState<number | null>(null)
   const [currentRoomId, setCurrentRoomId] = useState<number | null>(null)
-  const [thumbnailErrors, setThumbnailErrors] = useState<string[]>([])
 
   const resetView = useCallback(() => {
     runtimeRef.current?.reset()
@@ -175,7 +198,6 @@ export default function GameEngine({ jobId }: GameEngineProps) {
         setPhase('connecting')
         setProgress(3)
         setError(null)
-        setThumbnailErrors([])
         setCurrentRoomId(null)
         setStatusText('Verifying the reconstruction job')
 
@@ -208,18 +230,6 @@ export default function GameEngine({ jobId }: GameEngineProps) {
           throw new Error(
             'The generated scene did not pass reconstruction validation. Retry the reconstruction and inspect the validation report.',
           )
-        }
-        for (const node of scene.room_graph?.nodes ?? []) {
-          for (const photo of node.photos ?? []) {
-            if (
-              photo.thumbnail_url &&
-              !photo.thumbnail_url.startsWith(`/reconstructions/${jobId}/photos/`)
-            ) {
-              throw new Error(
-                'A room references a photograph that is not scoped to this job. The walkthrough was stopped to avoid showing another property.',
-              )
-            }
-          }
         }
 
         if (fetchedJob.status !== 'completed') {
@@ -322,6 +332,10 @@ export default function GameEngine({ jobId }: GameEngineProps) {
   }, [ceilingVisible, phase])
 
   useEffect(() => {
+    runtimeRef.current?.setFurnitureVisible(furnitureVisible)
+  }, [furnitureVisible, phase])
+
+  useEffect(() => {
     const runtime = runtimeRef.current
     if (!runtime) return
     runtime.renderer.setPixelRatio(qualityPixelRatio(quality))
@@ -348,9 +362,11 @@ export default function GameEngine({ jobId }: GameEngineProps) {
   const roomNodes = sceneBundle?.room_graph?.nodes ?? []
   const rooms = roomNodes.length
   const currentRoom = roomNodes.find((node) => node.id === currentRoomId) ?? null
-  const currentPhotos = currentRoom?.photos ?? []
-  const sfm = meta?.photogrammetry
+  const currentFurniture = currentRoom?.furniture ?? []
   const doors = sceneBundle?.collision?.doors.length ?? 0
+  const furnitureCount =
+    sceneBundle?.furniture?.length ?? sceneBundle?.collision?.furniture?.length ?? 0
+  const furnishingStyle = sceneBundle?.furnishing?.style ?? job?.furnishing_style ?? 'modern'
   const approximate = job ? job.scale_verified === false : false
   const showOverlay = phase !== 'ready'
 
@@ -407,7 +423,7 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                   />
                 </div>
                 <div className="mt-2 flex justify-between text-xs text-slate-400">
-                  <span>Floor plan geometry + photo palette</span>
+                  <span>Floor plan geometry + 3D furnishings</span>
                   <span>{Math.round(progress)}%</span>
                 </div>
               </>
@@ -424,7 +440,8 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                 {job?.project_name || 'Property walkthrough'}
               </p>
               <p className="mt-0.5 text-[11px] text-slate-300">
-                {rooms} room{rooms === 1 ? '' : 's'} · {doors} doorway{doors === 1 ? '' : 's'}
+                {rooms} room{rooms === 1 ? '' : 's'} · {furnitureCount} furniture item
+                {furnitureCount === 1 ? '' : 's'} · {doors} doorway{doors === 1 ? '' : 's'}
                 {approximate ? ' · approximate scale' : ' · dimensions supplied'}
                 {job?.navigation_available === false ? ' · partial navigation' : ''}
               </p>
@@ -441,56 +458,42 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                 </p>
                 {currentRoom && (
                   <p className="text-[11px] text-slate-300">
-                    {currentRoom.photo_count ?? 0} assigned photograph
-                    {(currentRoom.photo_count ?? 0) === 1 ? '' : 's'}
-                    {currentRoom.room_type ? ` · ${currentRoom.room_type.replace(/_/g, ' ')}` : ''}
+                    {currentRoom.room_type
+                      ? currentRoom.room_type.replace(/_/g, ' ')
+                      : 'unspecified type'}
+                    {currentRoom.area_m2 != null
+                      ? ` · ${Number(currentRoom.area_m2).toFixed(1)} m²`
+                      : ''}
+                    {' · '}
+                    {currentFurniture.length} furniture item
+                    {currentFurniture.length === 1 ? '' : 's'}
                   </p>
                 )}
-                {currentRoom && currentPhotos.length > 0 && (
-                  <ul className="mt-1 flex flex-wrap gap-1">
-                    {currentPhotos.slice(0, 4).map((photo) => (
-                      <li key={photo.photo_id}>
-                        {photo.thumbnail_url && !thumbnailErrors.includes(photo.photo_id) ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={assetUrl(photo.thumbnail_url)}
-                            alt={`Assigned photograph for ${currentRoom.name}`}
-                            title={photo.photo_id}
-                            className="h-10 w-14 rounded border border-white/20 object-cover"
-                            loading="lazy"
-                            onError={() =>
-                              setThumbnailErrors((previous) =>
-                                previous.includes(photo.photo_id)
-                                  ? previous
-                                  : [...previous, photo.photo_id],
-                              )
-                            }
-                          />
-                        ) : (
-                          <span className="flex h-10 w-14 items-center justify-center rounded border border-rose-500/40 bg-rose-950/50 p-1 text-center text-[8px] leading-tight text-rose-200">
-                            preview failed
-                          </span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {currentRoom && currentPhotos.length === 0 && (
+                {currentRoom && currentFurniture.length > 0 && (
                   <p className="mt-1 text-[10px] text-slate-400">
-                    No confirmed photo for this room; surfaces use neutral materials.
+                    {currentFurniture
+                      .slice(0, 6)
+                      .map((item) => item.label)
+                      .join(' · ')}
+                    {currentFurniture.length > 6 ? ` +${currentFurniture.length - 6} more` : ''}
                   </p>
                 )}
-                {currentRoom && thumbnailErrors.length > 0 && (
-                  <p className="mt-1 text-[10px] text-rose-300">
-                    An assigned photograph preview failed to load from the engine.{' '}
-                    <button onClick={retry} className="underline underline-offset-2">
-                      Reload tour
-                    </button>
+                {currentRoom && currentFurniture.length === 0 && (
+                  <p className="mt-1 text-[10px] text-slate-400">
+                    No furniture placed in this room. Unspecified rooms stay minimal, and items
+                    that cannot fit with a walkable route are skipped rather than forced.
                   </p>
                 )}
               </div>
             </div>
             <div className="pointer-events-auto flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => setFurnitureVisible((value) => !value)}
+                className="rounded-lg border border-white/15 bg-black/55 px-3 py-2 text-xs font-medium text-slate-100 backdrop-blur hover:bg-black/70"
+                aria-pressed={furnitureVisible}
+              >
+                {furnitureVisible ? 'Hide furniture' : 'Show furniture'}
+              </button>
               <button
                 onClick={() => setCeilingVisible((value) => !value)}
                 className="rounded-lg border border-white/15 bg-black/55 px-3 py-2 text-xs font-medium text-slate-100 backdrop-blur hover:bg-black/70"
@@ -600,32 +603,28 @@ export default function GameEngine({ jobId }: GameEngineProps) {
               <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2">
                 <dt className="text-slate-400">Rooms</dt>
                 <dd>{rooms}</dd>
+                <dt className="text-slate-400">Furniture</dt>
+                <dd>{furnitureCount} items</dd>
                 <dt className="text-slate-400">Doorways</dt>
                 <dd>{doors}</dd>
                 <dt className="text-slate-400">Scale</dt>
                 <dd>{approximate ? 'Estimated from the plan' : 'From supplied dimensions'}</dd>
-                <dt className="text-slate-400">Photos</dt>
-                <dd>{job?.photo_count ?? 0} (textures and SfM)</dd>
-                <dt className="text-slate-400">Camera estimate</dt>
-                <dd>
-                  {sfm?.status
-                    ? `${sfm.status.replace(/_/g, ' ')} · ${sfm.registered_images ?? 0}/${
-                        sfm.input_images ?? 0
-                      }`
-                    : 'Not run'}
-                </dd>
+                <dt className="text-slate-400">Style</dt>
+                <dd className="capitalize">{furnishingStyle}</dd>
+                <dt className="text-slate-400">Input</dt>
+                <dd>Floor plan only</dd>
                 <dt className="text-slate-400">Geometry</dt>
                 <dd>{job?.geometry_valid ? 'Validated' : 'Not validated'}</dd>
                 <dt className="text-slate-400">Navigation</dt>
                 <dd>{job?.navigation_available ? 'All rooms reachable' : 'Partial'}</dd>
                 <dt className="text-slate-400">Current room</dt>
                 <dd data-testid="scene-info-room">{currentRoom?.name ?? 'Between rooms'}</dd>
-                <dt className="text-slate-400">Assigned photos</dt>
+                <dt className="text-slate-400">Room furniture</dt>
                 <dd>
                   {currentRoom
-                    ? currentRoom.photo_count
-                      ? `${currentRoom.photo_count} (${(currentRoom.photo_ids ?? []).join(', ')})`
-                      : 'None — neutral materials'
+                    ? currentFurniture.length > 0
+                      ? currentFurniture.map((item) => item.label).join(', ')
+                      : 'None — room left minimal'
                     : '—'}
                 </dd>
               </dl>
@@ -838,6 +837,12 @@ function buildRuntime(
     bounds: node.bounds,
     polygon: node.polygon,
   }))
+  const wallCollision: WallBox[] = collision.walls
+  const furnitureCollision: WallBox[] = (collision.furniture ?? []).map((item) => ({
+    min: item.min,
+    max: item.max,
+  }))
+  const furnitureRoots = findFurnitureRoots(model)
   const runtime: Runtime = {
     renderer,
     scene,
@@ -849,11 +854,34 @@ function buildRuntime(
     velocityY: 0,
     keys: new Set<string>(),
     jumpQueued: false,
-    walls: collision.walls,
+    walls: [...wallCollision, ...furnitureCollision],
+    wallCollision,
+    furnitureCollision,
+    furnitureVisible: true,
+    furnitureCollisionPending: false,
     footprint,
     spawn: { position: spawnPosition.clone(), yaw: spawn.yaw },
     currentRoomId: null,
     frame: 0,
+    setFurnitureVisible: (visible: boolean) => {
+      runtime.furnitureVisible = visible
+      for (const node of furnitureRoots) node.visible = visible
+      if (!visible) {
+        runtime.furnitureCollisionPending = false
+        runtime.walls = runtime.wallCollision
+        return
+      }
+      const trapped = isBlocked(
+        runtime.position.x,
+        runtime.position.z,
+        PLAYER_RADIUS,
+        runtime.furnitureCollision,
+      )
+      runtime.furnitureCollisionPending = trapped
+      runtime.walls = trapped
+        ? runtime.wallCollision
+        : [...runtime.wallCollision, ...runtime.furnitureCollision]
+    },
     reset: () => {
       runtime.position.copy(runtime.spawn.position)
       runtime.yaw = runtime.spawn.yaw
@@ -1035,6 +1063,20 @@ function buildRuntime(
     runtime.frame = requestAnimationFrame(animate)
     const delta = Math.min(0.05, Math.max(0.001, (now - lastTime) / 1000))
     lastTime = now
+
+    if (
+      runtime.furnitureVisible &&
+      runtime.furnitureCollisionPending &&
+      !isBlocked(
+        runtime.position.x,
+        runtime.position.z,
+        PLAYER_RADIUS,
+        runtime.furnitureCollision,
+      )
+    ) {
+      runtime.furnitureCollisionPending = false
+      runtime.walls = [...runtime.wallCollision, ...runtime.furnitureCollision]
+    }
 
     let forward = 0
     let strafe = 0

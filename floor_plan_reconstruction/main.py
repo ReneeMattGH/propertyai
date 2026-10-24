@@ -1,23 +1,31 @@
 """
 RealEstAI property reconstruction service.
 
-Upload a floor plan plus photographs, and receive an interactive, walkable
-three-dimensional scene derived from the plan and coloured from the photos.
+Upload a floor plan and receive an interactive, furnished, walkable
+three-dimensional scene. The floor plan is the only required input: room
+types are inferred from plan geometry, confirmed by the user, and furniture
+is placed with deterministic rules from an original procedural asset library.
 
 Endpoints:
-  POST /reconstructions                  submit a new reconstruction
-  GET  /reconstructions                  list jobs (reopen past tours)
-  GET  /reconstructions/{id}             status + progress + report data
-  GET  /reconstructions/{id}/scene       collision volumes, room graph, manifest
-  GET  /reconstructions/{id}/manifest    asset manifest
-  GET  /reconstructions/{id}/assets      generated asset list
-  GET  /reconstructions/{id}/assets/{f}  download an asset (path-safe)
-  GET  /reconstructions/{id}/logs        human-readable job log
-  POST /reconstructions/{id}/cancel      request cancellation
-  POST /reconstructions/{id}/retry       retry a failed/cancelled job
+  POST /reconstructions                        submit a new reconstruction
+  GET  /reconstructions                        list jobs (reopen past tours)
+  GET  /reconstructions/{id}                   status + progress + report data
+  GET  /reconstructions/{id}/room-types        inferred room types awaiting review
+  POST /reconstructions/{id}/room-types        confirm/correct room types
+  POST /reconstructions/{id}/furnishings       change style or regenerate layout
+  PATCH /reconstructions/{id}/rooms/{room}     change one room's type
+  GET  /reconstructions/{id}/scene             collision volumes, room graph, manifest
+  GET  /reconstructions/{id}/manifest          asset manifest
+  GET  /reconstructions/{id}/assets            generated asset list
+  GET  /reconstructions/{id}/assets/{f}        download an asset (path-safe)
+  GET  /reconstructions/{id}/logs              human-readable job log
+  POST /reconstructions/{id}/cancel            request cancellation
+  POST /reconstructions/{id}/retry             retry a failed/cancelled job
 
 The pipeline runs in background tasks and CPU-bound stages are offloaded to
-worker threads so the HTTP API stays responsive.
+worker threads so the HTTP API stays responsive. The legacy photo-review
+helpers remain for jobs created by older releases, but new jobs never upload
+or require photographs.
 """
 from __future__ import annotations
 
@@ -57,6 +65,19 @@ TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
 class JobStatus:
     QUEUED = "queued"
+    PARSING_FLOOR_PLAN = "parsing_floor_plan"
+    DETECTING_ROOMS_OPENINGS = "detecting_rooms_openings"
+    VALIDATING_ROOM_LAYOUT = "validating_room_layout"
+    AWAITING_ROOM_TYPES = "awaiting_room_types"
+    GENERATING_GEOMETRY = "generating_geometry"
+    PLACING_FURNITURE = "placing_furniture"
+    GENERATING_LIGHTING_MATERIALS = "generating_lighting_materials"
+    VALIDATING_NAVIGATION_COLLISIONS = "validating_navigation_collisions"
+    LOADING_WALKTHROUGH = "loading_walkthrough"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    # Legacy photo-workflow states: kept so pre-existing jobs stay readable.
     PREPROCESSING = "preprocessing"
     DETECTING_ROOMS = "detecting_rooms"
     VALIDATING_LAYOUT = "validating_layout"
@@ -69,13 +90,23 @@ class JobStatus:
     TEXTURING = "texturing"
     EXPORTING = "exporting"
     VALIDATING_ASSETS = "validating_assets"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
 
 
 STAGE_LABELS = {
     JobStatus.QUEUED: "Queued",
+    JobStatus.PARSING_FLOOR_PLAN: "Parsing floor plan",
+    JobStatus.DETECTING_ROOMS_OPENINGS: "Detecting rooms and openings",
+    JobStatus.VALIDATING_ROOM_LAYOUT: "Validating room layout",
+    JobStatus.AWAITING_ROOM_TYPES: "Confirm room types",
+    JobStatus.GENERATING_GEOMETRY: "Generating 3D geometry",
+    JobStatus.PLACING_FURNITURE: "Placing furniture",
+    JobStatus.GENERATING_LIGHTING_MATERIALS: "Generating lighting and materials",
+    JobStatus.VALIDATING_NAVIGATION_COLLISIONS: "Validating navigation and collisions",
+    JobStatus.LOADING_WALKTHROUGH: "Loading walkthrough",
+    JobStatus.COMPLETED: "Completed",
+    JobStatus.FAILED: "Failed",
+    JobStatus.CANCELLED: "Cancelled",
+    # Legacy
     JobStatus.PREPROCESSING: "Preprocessing inputs",
     JobStatus.DETECTING_ROOMS: "Detecting walls and rooms",
     JobStatus.VALIDATING_LAYOUT: "Validating layout",
@@ -88,13 +119,21 @@ STAGE_LABELS = {
     JobStatus.TEXTURING: "Texturing surfaces",
     JobStatus.EXPORTING: "Exporting scene assets",
     JobStatus.VALIDATING_ASSETS: "Validating scene assets",
-    JobStatus.COMPLETED: "Completed",
-    JobStatus.FAILED: "Failed",
-    JobStatus.CANCELLED: "Cancelled",
 }
 
 STAGE_PROGRESS = {
     JobStatus.QUEUED: 0.0,
+    JobStatus.PARSING_FLOOR_PLAN: 6.0,
+    JobStatus.DETECTING_ROOMS_OPENINGS: 18.0,
+    JobStatus.VALIDATING_ROOM_LAYOUT: 28.0,
+    JobStatus.AWAITING_ROOM_TYPES: 34.0,
+    JobStatus.GENERATING_GEOMETRY: 48.0,
+    JobStatus.PLACING_FURNITURE: 62.0,
+    JobStatus.GENERATING_LIGHTING_MATERIALS: 76.0,
+    JobStatus.VALIDATING_NAVIGATION_COLLISIONS: 90.0,
+    JobStatus.LOADING_WALKTHROUGH: 97.0,
+    JobStatus.COMPLETED: 100.0,
+    # Legacy photo workflow
     JobStatus.PREPROCESSING: 5.0,
     JobStatus.DETECTING_ROOMS: 15.0,
     JobStatus.VALIDATING_LAYOUT: 28.0,
@@ -107,8 +146,26 @@ STAGE_PROGRESS = {
     JobStatus.TEXTURING: 80.0,
     JobStatus.EXPORTING: 89.0,
     JobStatus.VALIDATING_ASSETS: 95.0,
-    JobStatus.COMPLETED: 100.0,
 }
+
+PARSER_STAGE_MAP = {
+    "preprocessing": JobStatus.PARSING_FLOOR_PLAN,
+    "detecting_rooms": JobStatus.DETECTING_ROOMS_OPENINGS,
+    "validating_layout": JobStatus.VALIDATING_ROOM_LAYOUT,
+}
+
+GEOMETRY_STAGE_MAP = {
+    "generating_geometry": JobStatus.GENERATING_GEOMETRY,
+    "texturing": JobStatus.GENERATING_GEOMETRY,
+    "placing_furniture": JobStatus.PLACING_FURNITURE,
+    "generating_lighting_materials": JobStatus.GENERATING_LIGHTING_MATERIALS,
+    "validating_navigation_collisions": JobStatus.VALIDATING_NAVIGATION_COLLISIONS,
+    "exporting": JobStatus.LOADING_WALKTHROUGH,
+    "loading_walkthrough": JobStatus.LOADING_WALKTHROUGH,
+}
+
+ROOM_TYPE_REVIEW_FILE = "room_types.json"
+MAX_FURNISHING_VARIANT = 50
 
 
 class RetryRequest(BaseModel):
@@ -140,6 +197,30 @@ class PhotoAssignmentInput(BaseModel):
 class ConfirmAssignmentsRequest(BaseModel):
     assignments: List[PhotoAssignmentInput]
     room_types: Optional[Dict[str, str]] = None
+
+
+class RoomTypeInput(BaseModel):
+    room_id: int
+    room_type: str
+    name: Optional[str] = None
+
+
+class ConfirmRoomTypesRequest(BaseModel):
+    rooms: List[RoomTypeInput]
+    style: Optional[str] = None
+    variant: Optional[int] = None
+
+
+class FurnishingRequest(BaseModel):
+    style: Optional[str] = None
+    variant: Optional[int] = None
+    room_types: Optional[List[RoomTypeInput]] = None
+    regenerate: bool = False
+
+
+class RoomUpdateRequest(BaseModel):
+    room_type: str
+    name: Optional[str] = None
 
 
 class JobResponse(BaseModel):
@@ -181,12 +262,20 @@ class JobResponse(BaseModel):
     photo_review_summary: Optional[Dict[str, Any]] = None
     room_count: Optional[int] = None
     classifier: Optional[Dict[str, Any]] = None
+    room_types_url: Optional[str] = None
+    room_types_confirmed: Optional[bool] = None
+    room_type_review: Optional[Dict[str, Any]] = None
+    room_types: Optional[List[Dict[str, Any]]] = None
+    furnishing_style: Optional[str] = None
+    furnishing_variant: Optional[int] = None
+    furniture_count: Optional[int] = None
+    furniture_url: Optional[str] = None
 
 
 app = FastAPI(
     title="RealEstAI Reconstruction Service",
-    version="4.1.0",
-    description="Floor plan + photographs to an interactive 3D walkthrough",
+    version="5.0.0",
+    description="Floor plan to an interactive, automatically furnished 3D walkthrough",
 )
 
 frontend_urls = os.getenv(
@@ -252,6 +341,153 @@ def log_event(job_id: str, message: str):
         pass
 
 
+def _room_type_review_path(job_id: str) -> Path:
+    return GEOMETRY_DIR / job_id / ROOM_TYPE_REVIEW_FILE
+
+
+def load_room_type_review(job_id: str) -> Optional[Dict]:
+    path = _room_type_review_path(job_id)
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def save_room_type_review(job_id: str, payload: Dict):
+    path = _room_type_review_path(job_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    tmp.replace(path)
+
+
+def _room_type_summary(review: Optional[Dict]) -> Optional[Dict]:
+    if not review:
+        return None
+    rooms = review.get("rooms") or []
+    return {
+        "status": review.get("status"),
+        "source": review.get("source"),
+        "requires_confirmation": bool(review.get("requires_confirmation")),
+        "rooms": len(rooms),
+        "uncertain_rooms": [
+            int(room["room_id"])
+            for room in rooms
+            if room.get("needs_confirmation") or room.get("room_type") == "unknown"
+        ],
+        "confirmed_at": review.get("confirmed_at"),
+    }
+
+
+def _confirmed_room_types(review: Optional[Dict]) -> List[Dict]:
+    if not review:
+        return []
+    assignments = review.get("assignments") or []
+    if assignments:
+        return [
+            {
+                "room_id": int(entry["room_id"]),
+                "name": entry.get("name"),
+                "room_type": entry.get("room_type"),
+                "source": "user",
+            }
+            for entry in assignments
+        ]
+    return [
+        {
+            "room_id": int(room["room_id"]),
+            "name": room.get("name"),
+            "room_type": room.get("room_type"),
+            "source": room.get("source", "inferred"),
+        }
+        for room in review.get("rooms") or []
+    ]
+
+
+def _validated_style(style: Optional[str], current: Optional[str] = None) -> str:
+    from furniture_assets import STYLES
+
+    value = (style or current or "modern").strip().lower()
+    if value not in STYLES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported furnishing style {style!r}. "
+            f"Choose one of: {', '.join(STYLES)}.",
+        )
+    return value
+
+
+def _validated_variant(variant: Optional[int], current: Optional[int] = None) -> int:
+    value = current if variant is None else variant
+    try:
+        value = int(value or 0)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="variant must be an integer") from exc
+    if not 0 <= value <= MAX_FURNISHING_VARIANT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"variant must be between 0 and {MAX_FURNISHING_VARIANT}",
+        )
+    return value
+
+
+def _apply_room_type_confirmation(
+    review: Dict,
+    floor_plan_result: Dict,
+    selections: List[Dict],
+    style: str,
+    variant: int,
+):
+    from room_types import apply_names, normalize_confirmed_types
+
+    rooms = floor_plan_result.get("rooms") or []
+    metadata = normalize_confirmed_types({"rooms": selections}, rooms)
+    apply_names(metadata, rooms)
+    existing = {
+        int(entry["room_id"]): entry for entry in review.get("rooms") or []
+    }
+    updated_rooms = []
+    for room_id in sorted(metadata):
+        meta = metadata[room_id]
+        updated_rooms.append(
+            {
+                **existing.get(room_id, {"room_id": room_id}),
+                "room_id": room_id,
+                "room_type": meta["room_type"],
+                "name": meta["name"],
+                "confidence": 1.0,
+                "needs_confirmation": False,
+                "source": "user",
+                "alternatives": [],
+                "reasons": ["Room type confirmed by the user."],
+            }
+        )
+    assignments = [
+        {
+            "room_id": room_id,
+            "room_type": meta["room_type"],
+            "name": meta["name"],
+        }
+        for room_id, meta in sorted(metadata.items())
+    ]
+    return (
+        {
+            **review,
+            "rooms": updated_rooms,
+            "assignments": assignments,
+            "status": "confirmed",
+            "source": "user",
+            "requires_confirmation": False,
+            "confirmed_at": datetime.now(timezone.utc).isoformat(),
+            "style": style,
+            "variant": variant,
+        },
+        metadata,
+    )
+
+
 def _public_job(job: Dict) -> Dict:
     payload = dict(job)
     payload.pop("floor_plan_path", None)
@@ -270,11 +506,26 @@ def _public_job(job: Dict) -> Dict:
     )
     payload["floor_plan_url"] = f"/reconstructions/{payload['job_id']}/floor-plan"
     payload["diagnostics_url"] = f"/reconstructions/{payload['job_id']}/diagnostics"
+    has_room_types = _room_type_review_path(payload["job_id"]).is_file()
+    payload["room_types_url"] = (
+        f"/reconstructions/{payload['job_id']}/room-types" if has_room_types else None
+    )
     has_manifest = (
         GEOMETRY_DIR / payload["job_id"] / "photo_manifest.json"
     ).is_file()
     payload["review_url"] = (
         f"/reconstructions/{payload['job_id']}/review" if has_manifest else None
+    )
+    if "room_type_review" not in payload or payload.get("room_type_review") is None:
+        review = load_room_type_review(payload["job_id"]) if has_room_types else None
+        payload["room_type_review"] = _room_type_summary(review)
+    if payload.get("room_types") is None:
+        payload["room_types"] = []
+    payload["furniture_url"] = (
+        f"/reconstructions/{payload['job_id']}/assets/furniture.json"
+        if payload.get("status") == JobStatus.COMPLETED
+        and (OUTPUT_DIR / payload["job_id"] / "furniture.json").is_file()
+        else None
     )
     return payload
 
@@ -307,7 +558,12 @@ class ReconstructionPipeline:
 
     def _set_stage(self, job_id: str, status: str):
         self._check_cancelled(job_id)
-        progress = STAGE_PROGRESS.get(status, 0.0)
+        job = get_job(job_id) or {}
+        if job.get("status") == status:
+            return
+        progress = max(
+            float(job.get("progress") or 0.0), STAGE_PROGRESS.get(status, 0.0)
+        )
         update_job(
             job_id,
             status=status,
@@ -317,6 +573,22 @@ class ReconstructionPipeline:
             error_code=None,
         )
         log_event(job_id, f"{STAGE_LABELS.get(status, status)}")
+
+    def _parser_progress(self, job_id: str):
+        def callback(stage: str):
+            mapped = PARSER_STAGE_MAP.get(stage)
+            if mapped:
+                self._set_stage(job_id, mapped)
+
+        return callback
+
+    def _geometry_progress(self, job_id: str):
+        def callback(stage: str):
+            mapped = GEOMETRY_STAGE_MAP.get(stage)
+            if mapped:
+                self._set_stage(job_id, mapped)
+
+        return callback
 
     def _fail_job(
         self,
@@ -685,6 +957,602 @@ class ReconstructionPipeline:
                 f"Awaiting photo review: {len(ready)} photo(s), {len(rooms)} room(s); "
                 "no assignment is applied without user confirmation",
             )
+        except PipelineCancelled:
+            self._mark_cancelled(job_id)
+        except Exception as exc:  # noqa: BLE001 - surface the real failure to the user
+            self._mark_pipeline_error(job_id, exc)
+
+    async def prepare_floor_plan(
+        self,
+        job_id: str,
+        floor_plan_path: str,
+        num_floors: int,
+        known_width: Optional[float],
+        known_length: Optional[float],
+        preprocessing: Optional[Dict] = None,
+        manual_outline: Optional[Dict] = None,
+    ):
+        """Parse the floor plan, infer room types and pause for confirmation."""
+        import asyncio
+
+        from room_types import infer_room_types
+
+        stage_records = list((get_job(job_id) or {}).get("stage_records") or [])
+        try:
+            job = get_job(job_id) or {}
+            self._set_stage(job_id, JobStatus.PARSING_FLOOR_PLAN)
+            validation = await self.parser.validate_inputs(floor_plan_path)
+            diagnostics: Dict[str, Any] = {"input_validation": validation}
+            update_job(job_id, diagnostics=diagnostics)
+            if validation["errors"]:
+                self._fail_job(
+                    job_id,
+                    JobStatus.PARSING_FLOOR_PLAN,
+                    "; ".join(validation["errors"]),
+                    "invalid_inputs",
+                    diagnostics,
+                )
+                return
+            self._record_stage(
+                job_id,
+                stage_records,
+                "input_validation",
+                "completed",
+                {
+                    "floor_plan_valid": validation["floor_plan_valid"],
+                    "photos_required": False,
+                },
+            )
+
+            self._set_stage(job_id, JobStatus.DETECTING_ROOMS_OPENINGS)
+            if manual_outline:
+                log_event(job_id, "Parsing user-supplied manual room outlines")
+                floor_plan_result = await self.parser.parse_manual_outline(
+                    job_id,
+                    floor_plan_path,
+                    known_width,
+                    known_length,
+                    manual_outline.get("rooms") or [],
+                    manual_outline.get("doorways") or [],
+                    manual_outline.get("wall_thickness_px"),
+                    progress_callback=self._parser_progress(job_id),
+                )
+            else:
+                floor_plan_result = await self.parser.parse_floor_plan(
+                    job_id,
+                    floor_plan_path,
+                    known_width,
+                    known_length,
+                    progress_callback=self._parser_progress(job_id),
+                    preprocessing=preprocessing,
+                )
+            self._check_cancelled(job_id)
+            diagnostics["floor_plan"] = floor_plan_result
+            update_job(job_id, diagnostics=diagnostics)
+            if floor_plan_result.get("status") != "completed":
+                self._fail_job(
+                    job_id,
+                    JobStatus.DETECTING_ROOMS_OPENINGS,
+                    floor_plan_result.get("error", "Floor plan parsing failed"),
+                    floor_plan_result.get("error_code"),
+                    diagnostics,
+                )
+                return
+            prepared_plan_path = GEOMETRY_DIR / job_id / "floor_plan.json"
+            prepared_plan_path.parent.mkdir(parents=True, exist_ok=True)
+            prepared_plan_path.write_text(json.dumps(floor_plan_result, indent=2))
+            self._record_stage(
+                job_id,
+                stage_records,
+                "floor_plan_parse",
+                "completed",
+                {
+                    "rooms": len(floor_plan_result["rooms"]),
+                    "walls": len(floor_plan_result["wall_segments"]),
+                    "doorways": len(floor_plan_result["doorways"]),
+                    "windows": len(floor_plan_result.get("windows") or []),
+                    "scale_pixels_per_meter": floor_plan_result["scale_pixels_per_meter"],
+                    "scale_source": floor_plan_result["scale_source"],
+                    "scale_verified": bool(floor_plan_result.get("scale_verified")),
+                },
+            )
+            log_event(
+                job_id,
+                f"Floor plan parsed: {len(floor_plan_result['rooms'])} rooms, "
+                f"{len(floor_plan_result['wall_segments'])} walls, "
+                f"{len(floor_plan_result['doorways'])} doorway(s), "
+                f"{len(floor_plan_result.get('windows') or [])} window(s)",
+            )
+
+            self._set_stage(job_id, JobStatus.VALIDATING_ROOM_LAYOUT)
+            rooms = floor_plan_result["rooms"]
+            inference = await asyncio.to_thread(
+                infer_room_types,
+                rooms,
+                floor_plan_result.get("doorways") or [],
+                floor_plan_result.get("windows") or [],
+                None,
+                floor_plan_result.get("footprint_m"),
+            )
+            review = {
+                "schema_version": "1.0",
+                "job_id": job_id,
+                **inference,
+                # The inferred types are a proposal: the user always confirms
+                # them before furniture is placed.
+                "requires_confirmation": True,
+                "status": "pending",
+                "confirmed_at": None,
+                "assignments": [],
+                "style": job.get("furnishing_style") or "modern",
+                "variant": int(job.get("furnishing_variant") or 0),
+            }
+            save_room_type_review(job_id, review)
+            self._record_stage(
+                job_id,
+                stage_records,
+                "room_type_inference",
+                "review_required",
+                {
+                    "rooms": len(rooms),
+                    "uncertain_rooms": _room_type_summary(review)["uncertain_rooms"],
+                    "source": inference.get("source"),
+                },
+            )
+            diagnostics["room_types"] = {
+                "source": inference.get("source"),
+                "requires_confirmation": True,
+            }
+            update_job(
+                job_id,
+                status=JobStatus.AWAITING_ROOM_TYPES,
+                current_stage=JobStatus.AWAITING_ROOM_TYPES,
+                progress=STAGE_PROGRESS[JobStatus.AWAITING_ROOM_TYPES],
+                failed_stage=None,
+                error=None,
+                error_code=None,
+                diagnostics=diagnostics,
+                stage_records=stage_records,
+                review_required=True,
+                assignments_confirmed=False,
+                room_types_confirmed=False,
+                room_types=[],
+                room_type_review=_room_type_summary(review),
+                room_count=len(rooms),
+                warnings=list(floor_plan_result.get("warnings", [])),
+                limitations=[],
+                assets=[],
+                furniture_count=0,
+            )
+            log_event(
+                job_id,
+                f"Awaiting room-type confirmation: {len(rooms)} room(s) detected; "
+                "no furniture is placed before the user confirms the proposal",
+            )
+        except PipelineCancelled:
+            self._mark_cancelled(job_id)
+        except Exception as exc:  # noqa: BLE001 - surface the real failure to the user
+            self._mark_pipeline_error(job_id, exc)
+
+    async def reconstruct_furnished(
+        self,
+        job_id: str,
+        style: Optional[str] = None,
+        variant: Optional[int] = None,
+    ):
+        """Build and validate the furnished scene from confirmed room types."""
+        import asyncio
+
+        from furnishing import furnish_floor_plan
+        from furniture_assets import STYLE_LABELS, STYLES
+        from room_types import ROOM_TYPE_LABELS, apply_names, normalize_confirmed_types
+
+        stage_records = list((get_job(job_id) or {}).get("stage_records") or [])
+        try:
+            job = get_job(job_id) or {}
+            property_id = job.get("property_id") or job_id
+            plan_path = GEOMETRY_DIR / job_id / "floor_plan.json"
+            if not plan_path.is_file():
+                self._fail_job(
+                    job_id,
+                    JobStatus.PARSING_FLOOR_PLAN,
+                    "The prepared floor plan is missing; retry the job to parse it again",
+                    "prepared_plan_missing",
+                )
+                return
+            review = load_room_type_review(job_id)
+            if not review:
+                self._fail_job(
+                    job_id,
+                    JobStatus.AWAITING_ROOM_TYPES,
+                    "Room types have not been reviewed for this job",
+                    "room_types_required",
+                )
+                return
+            if review.get("status") != "confirmed":
+                self._fail_job(
+                    job_id,
+                    JobStatus.AWAITING_ROOM_TYPES,
+                    "Room types have not been confirmed",
+                    "room_types_required",
+                )
+                return
+            floor_plan_result = json.loads(plan_path.read_text())
+            rooms = floor_plan_result.get("rooms") or []
+            try:
+                room_metadata = normalize_confirmed_types(
+                    {"rooms": review.get("assignments") or []},
+                    rooms,
+                    fallback=review.get("rooms"),
+                )
+            except ValueError as exc:
+                self._fail_job(
+                    job_id,
+                    JobStatus.AWAITING_ROOM_TYPES,
+                    str(exc),
+                    "room_types_invalid",
+                )
+                return
+            apply_names(room_metadata, rooms)
+            for metadata in room_metadata.values():
+                metadata["source"] = "user"
+
+            style = (style or job.get("furnishing_style") or review.get("style") or "modern")
+            if style not in STYLES:
+                style = "modern"
+            variant = int(
+                variant
+                if variant is not None
+                else job.get("furnishing_variant") or review.get("variant") or 0
+            )
+            variant = max(0, min(variant, MAX_FURNISHING_VARIANT))
+            update_job(
+                job_id,
+                room_types=_confirmed_room_types(review),
+                room_types_confirmed=True,
+                furnishing_style=style,
+                furnishing_variant=variant,
+            )
+            self._record_stage(
+                job_id,
+                stage_records,
+                "room_types",
+                "confirmed",
+                {"rooms": len(room_metadata), "source": "user"},
+            )
+
+            self._set_stage(job_id, JobStatus.GENERATING_GEOMETRY)
+            furnishing = await asyncio.to_thread(
+                furnish_floor_plan,
+                rooms,
+                room_metadata,
+                floor_plan_result.get("doorways") or [],
+                floor_plan_result.get("windows") or [],
+                style,
+                variant,
+            )
+            self._record_stage(
+                job_id,
+                stage_records,
+                "furnishing_plan",
+                "completed",
+                {
+                    "style": style,
+                    "variant": variant,
+                    "items": len(furnishing.get("items") or []),
+                    "rooms_furnished": (furnishing.get("summary") or {}).get(
+                        "rooms_furnished", 0
+                    ),
+                    "rooms_unspecified": (furnishing.get("summary") or {}).get(
+                        "rooms_unspecified", 0
+                    ),
+                },
+            )
+            log_event(
+                job_id,
+                f"Furnishing planned: {len(furnishing.get('items') or [])} item(s), "
+                f"style {STYLE_LABELS.get(style, style)}, variant {variant}",
+            )
+
+            geometry_result = await self.geometry_builder.build_geometry(
+                job_id,
+                floor_plan_result,
+                {},
+                int(job.get("num_floors") or 1),
+                (job.get("known_dimensions") or {}).get("width_meters"),
+                (job.get("known_dimensions") or {}).get("length_meters"),
+                None,
+                progress_callback=self._geometry_progress(job_id),
+                photo_manifest=None,
+                room_metadata=room_metadata,
+                use_photo_floor_textures=False,
+                furnishing=furnishing,
+                style=style,
+            )
+            diagnostics: Dict[str, Any] = dict(job.get("diagnostics") or {})
+            diagnostics["geometry"] = {
+                key: geometry_result.get(key)
+                for key in (
+                    "vertices_count",
+                    "faces_count",
+                    "collision_walls",
+                    "collision_furniture",
+                    "rooms_count",
+                    "room_graph_edges",
+                    "furniture_items",
+                    "warnings",
+                    "limitations",
+                )
+            }
+            diagnostics["furnishing"] = {
+                "style": style,
+                "variant": variant,
+                "summary": furnishing.get("summary"),
+                "warnings": furnishing.get("warnings"),
+            }
+            update_job(job_id, diagnostics=diagnostics)
+            self._record_stage(
+                job_id,
+                stage_records,
+                "geometry_build",
+                "completed",
+                {
+                    "vertices": geometry_result["vertices_count"],
+                    "faces": geometry_result["faces_count"],
+                    "collision_walls": geometry_result["collision_walls"],
+                    "collision_furniture": geometry_result["collision_furniture"],
+                    "furniture_items": geometry_result["furniture_items"],
+                    "primary_asset": "scene.glb",
+                },
+            )
+            log_event(
+                job_id,
+                f"Geometry built: {geometry_result['vertices_count']} vertices, "
+                f"{geometry_result['faces_count']} faces, "
+                f"{geometry_result['furniture_items']} furniture item(s)",
+            )
+
+            self._set_stage(job_id, JobStatus.VALIDATING_NAVIGATION_COLLISIONS)
+            validation_result = await self.validator.validate_scene(
+                job_id,
+                geometry_result,
+                photo_manifest=None,
+                floor_plan_result=floor_plan_result,
+                furnishing=furnishing,
+            )
+            validation_result["scale_verified"] = bool(
+                floor_plan_result.get("scale_verified")
+            )
+            self._check_cancelled(job_id)
+
+            warnings = list(
+                dict.fromkeys(
+                    list(floor_plan_result.get("warnings", []))
+                    + list(furnishing.get("warnings", []))
+                    + list(geometry_result.get("warnings", []))
+                    + list(validation_result.get("warnings", []))
+                )
+            )
+            limitations = list(dict.fromkeys(geometry_result.get("limitations", [])))
+            self._record_stage(
+                job_id,
+                stage_records,
+                "scene_validation",
+                "completed" if validation_result["geometry_valid"] else "failed",
+                {
+                    "geometry_valid": validation_result["geometry_valid"],
+                    "navigation_available": validation_result["navigation_available"],
+                    "checks": validation_result.get("checks", {}),
+                },
+            )
+            room_payload = []
+            label_map = dict(ROOM_TYPE_LABELS)
+            review_rooms = {
+                int(entry["room_id"]): entry for entry in review.get("rooms") or []
+            }
+            rooms_by_id = {int(room["id"]): room for room in rooms}
+            furnishing_rooms = {
+                int(entry["room_id"]): entry for entry in furnishing.get("rooms") or []
+            }
+            for room_id in sorted(room_metadata):
+                metadata = room_metadata[room_id]
+                review_entry = review_rooms.get(room_id, {})
+                room = rooms_by_id.get(room_id, {})
+                room_payload.append(
+                    {
+                        "room_id": room_id,
+                        "name": metadata.get("name"),
+                        "room_type": metadata.get("room_type"),
+                        "room_type_label": label_map.get(metadata.get("room_type")),
+                        "confidence": review_entry.get("confidence"),
+                        "source": metadata.get("source", "user"),
+                        "area_m2": room.get("area_m2"),
+                        "bounds_m": room.get("bounds_m"),
+                        "polygon": room.get("polygon"),
+                        "furniture": [
+                            item["id"]
+                            for item in furnishing.get("items") or []
+                            if int(item["room_id"]) == room_id
+                        ],
+                        "furnishing_status": (furnishing_rooms.get(room_id) or {}).get(
+                            "status"
+                        ),
+                    }
+                )
+            concise_rooms = [
+                {
+                    "room_id": entry["room_id"],
+                    "name": entry["name"],
+                    "room_type": entry["room_type"],
+                    "source": entry["source"],
+                }
+                for entry in room_payload
+            ]
+
+            if not validation_result["geometry_valid"]:
+                message = "Scene validation failed: " + "; ".join(
+                    validation_result.get("errors", ["unknown validation error"])
+                )
+                update_job(
+                    job_id,
+                    diagnostics={
+                        **diagnostics,
+                        "scene_validation": validation_result,
+                        "furnishing": {
+                            "style": style,
+                            "variant": variant,
+                            "summary": furnishing.get("summary"),
+                        },
+                    },
+                    geometry_valid=False,
+                    navigation_available=False,
+                    assets=geometry_result.get("assets", []),
+                    warnings=warnings,
+                    limitations=limitations,
+                    room_types=concise_rooms,
+                    room_types_confirmed=True,
+                    furniture_count=len(furnishing.get("items") or []),
+                    furnishing_style=style,
+                    furnishing_variant=variant,
+                    error=message,
+                    error_code="scene_validation_failed",
+                    failed_stage=JobStatus.VALIDATING_NAVIGATION_COLLISIONS,
+                    status=JobStatus.FAILED,
+                    current_stage="failed",
+                    progress=STAGE_PROGRESS[
+                        JobStatus.VALIDATING_NAVIGATION_COLLISIONS
+                    ],
+                )
+                log_event(job_id, message)
+                return
+
+            self._set_stage(job_id, JobStatus.LOADING_WALKTHROUGH)
+            collision = json.loads(
+                (Path(geometry_result["output_dir"]) / "collision.json").read_text()
+            )
+            manifest_payload = {
+                "schema_version": "3.0",
+                "workflow": "floor_plan_only",
+                "property_id": property_id,
+                "job_id": job_id,
+                "project_name": job.get("project_name"),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "format": "glb",
+                "primary_asset": "scene.glb",
+                "assets": geometry_result["assets"],
+                "scene": {
+                    "bounds": geometry_result.get("geometry", {}).get("bounds"),
+                    "floor_height": geometry_result["metadata"]["floor_height"],
+                    "rooms": geometry_result["rooms_count"],
+                    "doors": len(floor_plan_result.get("doorways") or []),
+                    "windows": len(floor_plan_result.get("windows") or []),
+                    "spawn": collision["spawn"],
+                    "scale": geometry_result["metadata"]["scale"],
+                    "approximate": not bool(floor_plan_result.get("scale_verified")),
+                    "furnishing_style": style,
+                    "furniture_count": len(furnishing.get("items") or []),
+                },
+                "method": geometry_result["metadata"]["method"],
+                "room_types": room_payload,
+                "rooms": room_payload,
+                "room_assignments": room_payload,
+                "furnishing": {
+                    "style": style,
+                    "style_label": furnishing.get("style_label"),
+                    "variant": variant,
+                    "summary": furnishing.get("summary"),
+                    "limits": furnishing.get("limits"),
+                    "materials": furnishing.get("materials"),
+                },
+                "furniture": furnishing.get("items") or [],
+                "stats": {
+                    "rooms": len(room_payload),
+                    "furniture_items": len(furnishing.get("items") or []),
+                    "collision_items": (furnishing.get("summary") or {}).get(
+                        "collision_items"
+                    ),
+                },
+                "inferred": geometry_result["metadata"].get("inferred", []),
+                "provenance": {
+                    "property_id": property_id,
+                    "job_id": job_id,
+                    "engine": {
+                        "service": "RealEstAI Reconstruction Service",
+                        "version": app.version,
+                        "photographs_used": False,
+                        "furniture": "procedural asset library + deterministic constraints",
+                    },
+                    "inputs": {
+                        "floor_plan": (job.get("inputs") or {}).get("floor_plan"),
+                        "num_floors": job.get("num_floors"),
+                        "known_dimensions": job.get("known_dimensions"),
+                        "room_types_confirmed": True,
+                    },
+                    "stages": stage_records,
+                    "outputs": geometry_result["assets"],
+                    "warnings": warnings,
+                    "limitations": limitations,
+                },
+                "validation": {
+                    "geometry_valid": validation_result["geometry_valid"],
+                    "navigation_available": validation_result["navigation_available"],
+                    "checks": validation_result.get("checks", {}),
+                    "stats": validation_result.get("stats", {}),
+                },
+                "warnings": warnings,
+                "limitations": limitations,
+            }
+            self.write_manifest(Path(geometry_result["output_dir"]), manifest_payload)
+            self._record_stage(
+                job_id,
+                stage_records,
+                "manifest",
+                "written",
+                {"assets": [asset["name"] for asset in geometry_result["assets"]]},
+            )
+            update_job(
+                job_id,
+                diagnostics={
+                    **diagnostics,
+                    "scene_validation": validation_result,
+                    "furnishing": {
+                        "style": style,
+                        "variant": variant,
+                        "summary": furnishing.get("summary"),
+                        "warnings": furnishing.get("warnings"),
+                    },
+                },
+                geometry_valid=True,
+                navigation_available=bool(validation_result["navigation_available"]),
+                scale_verified=bool(floor_plan_result.get("scale_verified")),
+                warnings=warnings,
+                limitations=limitations,
+                assets=geometry_result["assets"],
+                status=JobStatus.COMPLETED,
+                current_stage=JobStatus.COMPLETED,
+                progress=100,
+                failed_stage=None,
+                error_code=None,
+                error=None,
+                review_required=False,
+                assignments_confirmed=False,
+                room_count=len(rooms),
+                room_types=concise_rooms,
+                room_types_confirmed=True,
+                room_type_review=_room_type_summary(review),
+                furnishing_style=style,
+                furnishing_variant=variant,
+                furniture_count=len(furnishing.get("items") or []),
+                stage_records=stage_records,
+            )
+            log_event(
+                job_id,
+                "Reconstruction completed: scene.glb validated "
+                f"({geometry_result['faces_count']} faces, "
+                f"{geometry_result['furniture_items']} furniture item(s), navigation "
+                f"{'available' if validation_result['navigation_available'] else 'partial'})",
+            )
+
         except PipelineCancelled:
             self._mark_cancelled(job_id)
         except Exception as exc:  # noqa: BLE001 - surface the real failure to the user
@@ -1064,7 +1932,7 @@ class ReconstructionPipeline:
         job = get_job(job_id) or {}
         failed_stage = job.get("current_stage")
         if failed_stage in (None, "failed", "cancelled", JobStatus.COMPLETED):
-            failed_stage = JobStatus.DETECTING_ROOMS
+            failed_stage = JobStatus.PARSING_FLOOR_PLAN
         progress = float(job.get("progress") or 0.0)
         if failed_stage in STAGE_PROGRESS:
             progress = min(progress, STAGE_PROGRESS[failed_stage])
@@ -1142,6 +2010,16 @@ async def health_check():
     except ImportError:
         classifier_available = False
         classifier_versions = {}
+    try:
+        from furniture_assets import ASSETS, STYLES
+
+        furnishing = {
+            "asset_library_size": len(ASSETS),
+            "styles": list(STYLES),
+            "requires_external_vision_api": False,
+        }
+    except ImportError:
+        furnishing = {}
 
     poppler = shutil.which("pdftoppm") is not None
     return {
@@ -1160,6 +2038,7 @@ async def health_check():
             "dense_mvs_available": colmap_cuda,
             "room_classifier_available": classifier_available,
             "room_classifier": classifier_versions,
+            "furnishing": furnishing,
         },
         "workspace": {
             "input_dir": str(INPUT_DIR),
@@ -1193,7 +2072,7 @@ def _review_floor_plan(job_id: str) -> Dict:
     if not path.is_file():
         raise HTTPException(
             status_code=409,
-            detail="The floor plan has not been prepared for photo review yet",
+            detail="The floor plan has not been prepared for this job yet",
         )
     try:
         return json.loads(path.read_text())
@@ -1306,8 +2185,9 @@ async def create_reconstruction(
     num_floors: int = Form(1),
     known_width: Optional[float] = Form(None),
     known_length: Optional[float] = Form(None),
-    photos: List[UploadFile] = File(...),
+    style: str = Form("modern"),
     property_id: Optional[str] = Form(None),
+    photos: Optional[List[UploadFile]] = File(None),
 ):
     project_name = project_name.strip()
     if not project_name:
@@ -1323,10 +2203,8 @@ async def create_reconstruction(
         raise HTTPException(status_code=400, detail="Known width must be between 2 and 100 metres")
     if known_length is not None and not (2 <= known_length <= 100):
         raise HTTPException(status_code=400, detail="Known length must be between 2 and 100 metres")
-    if not photos:
-        raise HTTPException(status_code=400, detail="At least one property photograph is required")
-    if len(photos) > MAX_PHOTOS:
-        raise HTTPException(status_code=400, detail=f"At most {MAX_PHOTOS} photographs are allowed")
+    style = _validated_style(style)
+    ignored_photos = len(photos or [])
 
     allowed_plan = {".png", ".jpg", ".jpeg", ".pdf"}
     plan_ext = Path(floor_plan.filename or "floor_plan").suffix.lower()
@@ -1335,20 +2213,11 @@ async def create_reconstruction(
             status_code=400,
             detail=f"Unsupported floor plan format '{plan_ext}'. Allowed: PNG, JPG, JPEG, PDF",
         )
-    for photo in photos:
-        ext = Path(photo.filename or "photo").suffix.lower()
-        if ext not in {".png", ".jpg", ".jpeg"}:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported photo format '{ext}' in {photo.filename}. Allowed: PNG, JPG, JPEG",
-            )
 
     job_id = str(uuid.uuid4())
     job_dir = INPUT_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     floor_plan_path = job_dir / f"floor_plan{plan_ext}"
-    photo_paths: List[str] = []
-    photo_inputs: List[Dict[str, Any]] = []
     try:
         saved = 0
         plan_digest = hashlib.sha256()
@@ -1362,34 +2231,6 @@ async def create_reconstruction(
                     )
                 plan_digest.update(chunk)
                 handle.write(chunk)
-        for index, photo in enumerate(photos):
-            ext = Path(photo.filename or "photo").suffix.lower()
-            original_name = photo.filename or f"photo_{index}{ext}"
-            target = job_dir / f"photo_{index:02d}_{_safe_stem(original_name)}{ext}"
-            size = 0
-            digest = hashlib.sha256()
-            with open(target, "wb") as handle:
-                for chunk in iter(lambda stream=photo.file: stream.read(1024 * 1024), b""):
-                    size += len(chunk)
-                    if size > MAX_PHOTO_BYTES:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Photo {photo.filename} is larger than "
-                            f"{MAX_PHOTO_BYTES // (1024 * 1024)} MB",
-                        )
-                    digest.update(chunk)
-                    handle.write(chunk)
-            if size == 0:
-                raise HTTPException(status_code=400, detail=f"Photo {photo.filename} is empty")
-            photo_paths.append(str(target))
-            photo_inputs.append(
-                {
-                    "original_filename": original_name,
-                    "stored_filename": target.name,
-                    "size_bytes": size,
-                    "sha256": digest.hexdigest(),
-                }
-            )
         if floor_plan_path.stat().st_size == 0:
             raise HTTPException(status_code=400, detail="Floor plan file is empty")
     except HTTPException:
@@ -1412,14 +2253,11 @@ async def create_reconstruction(
             "size_bytes": floor_plan_path.stat().st_size,
             "sha256": plan_digest.hexdigest(),
         },
-        "photos": photo_inputs,
+        "photos": [],
+        "photos_ignored": ignored_photos,
         "num_floors": num_floors,
         "known_dimensions": known_dimensions,
     }
-
-    from photo_manifest import build_photo_manifest, match_summary
-
-    manifest = build_photo_manifest(job_id, property_id, photo_inputs, photo_paths)
 
     now = datetime.now(timezone.utc).isoformat()
     job = {
@@ -1433,7 +2271,7 @@ async def create_reconstruction(
         "error": None,
         "project_name": project_name,
         "floor_plan_filename": floor_plan.filename,
-        "photo_count": len(photos),
+        "photo_count": 0,
         "num_floors": num_floors,
         "known_dimensions": known_dimensions,
         "inputs": inputs,
@@ -1445,24 +2283,38 @@ async def create_reconstruction(
         "retry_count": 0,
         "cancel_requested": False,
         "floor_plan_path": str(floor_plan_path),
-        "photo_paths": photo_paths,
+        "photo_paths": [],
         "review_required": True,
         "assignments_confirmed": False,
-        "photo_review_summary": match_summary(manifest),
-        "classifier": manifest.get("classifier"),
+        "photo_review_summary": None,
+        "classifier": None,
         "use_photo_floor_textures": False,
+        "room_types": [],
+        "room_types_confirmed": False,
+        "room_type_review": None,
+        "furnishing_style": style,
+        "furnishing_variant": 0,
+        "furniture_count": 0,
     }
     with _JOBS_LOCK:
         jobs = _read_jobs_unlocked()
         jobs[job_id] = job
         _write_jobs_unlocked(jobs)
-    log_event(job_id, f"Job created for '{project_name}' ({len(photos)} photos)")
+    log_event(
+        job_id,
+        f"Job created for '{project_name}' (floor-plan-only, style {style})"
+        + (
+            f"; {ignored_photos} photo(s) were supplied but are not required and "
+            "were not stored"
+            if ignored_photos
+            else ""
+        ),
+    )
 
     background_tasks.add_task(
-        get_pipeline().run,
+        get_pipeline().prepare_floor_plan,
         job_id,
         str(floor_plan_path),
-        photo_paths,
         num_floors,
         known_width,
         known_length,
@@ -1502,6 +2354,17 @@ async def cancel_reconstruction(job_id: str):
             status_code=409, detail=f"Job already {job.get('status')} and cannot be cancelled"
         )
     update_job(job_id, cancel_requested=True)
+    if job.get("status") in {
+        JobStatus.AWAITING_ROOM_TYPES,
+        JobStatus.AWAITING_REVIEW,
+    }:
+        update_job(
+            job_id,
+            status=JobStatus.CANCELLED,
+            current_stage="cancelled",
+            error="Reconstruction cancelled by user",
+            error_code="cancelled",
+        )
     log_event(job_id, "Cancellation requested")
     return _public_job(get_job(job_id) or job)
 
@@ -1543,28 +2406,37 @@ async def retry_reconstruction(
                 detail="sealing must be one of auto, minimal, aggressive",
             )
     floor_plan_path = job.get("floor_plan_path")
-    photo_paths = job.get("photo_paths") or []
-    if not floor_plan_path or not Path(floor_plan_path).exists() or not all(
-        Path(path).exists() for path in photo_paths
-    ):
+    if not floor_plan_path or not Path(floor_plan_path).exists():
         raise HTTPException(
             status_code=409,
-            detail="Original input files are no longer available; create a new reconstruction",
+            detail="The original floor plan is no longer available; create a new reconstruction",
         )
     from photo_manifest import load_photo_manifest
 
-    manifest = load_photo_manifest(job_id)
-    resume_reconstruction = bool(
-        job.get("assignments_confirmed")
-        and manifest
-        and (manifest.get("review") or {}).get("status") == "confirmed"
-        and (GEOMETRY_DIR / job_id / "floor_plan.json").is_file()
+    photo_manifest = load_photo_manifest(job_id)
+    prepared_plan = (GEOMETRY_DIR / job_id / "floor_plan.json").is_file()
+    review = load_room_type_review(job_id)
+    resume_furnished = bool(
+        review
+        and review.get("status") == "confirmed"
+        and prepared_plan
+        and not preprocessing
     )
+    legacy_resume = bool(
+        not review
+        and job.get("assignments_confirmed")
+        and photo_manifest
+        and (photo_manifest.get("review") or {}).get("status") == "confirmed"
+        and prepared_plan
+        and not preprocessing
+        and all(Path(path).exists() for path in (job.get("photo_paths") or []))
+    )
+    is_legacy = bool(photo_manifest) or bool(job.get("photo_paths"))
     update_job(
         job_id,
         status=JobStatus.QUEUED,
         current_stage=JobStatus.QUEUED,
-        progress=STAGE_PROGRESS[JobStatus.MATCHING_PHOTOS] if resume_reconstruction else 0.0,
+        progress=0.0,
         error=None,
         error_code=None,
         failed_stage=None,
@@ -1575,21 +2447,45 @@ async def retry_reconstruction(
         cancel_requested=False,
         retry_preprocessing=preprocessing or {},
         retry_count=int(job.get("retry_count") or 0) + 1,
-        review_required=not resume_reconstruction,
-        assignments_confirmed=resume_reconstruction,
+        review_required=not (resume_furnished or legacy_resume),
+        assignments_confirmed=legacy_resume,
+        room_types_confirmed=bool(resume_furnished),
+        furniture_count=0 if not resume_furnished else job.get("furniture_count", 0),
     )
     log_event(
         job_id,
-        "Retry requested (reconstruction)" if resume_reconstruction else "Retry requested",
+        "Retry requested (furnished reconstruction)"
+        if resume_furnished
+        else "Retry requested (legacy reconstruction)"
+        if legacy_resume
+        else "Retry requested (re-parse floor plan)",
     )
-    if resume_reconstruction:
+    if resume_furnished:
+        background_tasks.add_task(
+            get_pipeline().reconstruct_furnished,
+            job_id,
+            job.get("furnishing_style"),
+            job.get("furnishing_variant"),
+        )
+    elif legacy_resume:
         background_tasks.add_task(get_pipeline().reconstruct, job_id)
-    else:
+    elif is_legacy:
         background_tasks.add_task(
             get_pipeline().run,
             job_id,
             floor_plan_path,
-            photo_paths,
+            job.get("photo_paths") or [],
+            int(job.get("num_floors") or 1),
+            (job.get("known_dimensions") or {}).get("width_meters"),
+            (job.get("known_dimensions") or {}).get("length_meters"),
+            preprocessing,
+            job.get("manual_outline"),
+        )
+    else:
+        background_tasks.add_task(
+            get_pipeline().prepare_floor_plan,
+            job_id,
+            floor_plan_path,
             int(job.get("num_floors") or 1),
             (job.get("known_dimensions") or {}).get("width_meters"),
             (job.get("known_dimensions") or {}).get("length_meters"),
@@ -1619,13 +2515,10 @@ async def submit_manual_plan(
             "partially navigable jobs",
         )
     floor_plan_path = job.get("floor_plan_path")
-    photo_paths = job.get("photo_paths") or []
-    if not floor_plan_path or not Path(floor_plan_path).exists() or not all(
-        Path(path).exists() for path in photo_paths
-    ):
+    if not floor_plan_path or not Path(floor_plan_path).exists():
         raise HTTPException(
             status_code=409,
-            detail="Original input files are no longer available; create a new reconstruction",
+            detail="The original floor plan is no longer available; create a new reconstruction",
         )
     if not request.rooms:
         raise HTTPException(status_code=400, detail="At least one room outline is required")
@@ -1677,19 +2570,328 @@ async def submit_manual_plan(
         review_required=True,
         assignments_confirmed=False,
         photo_review_summary=None,
+        room_types=[],
+        room_types_confirmed=False,
+        room_type_review=None,
+        furniture_count=0,
     )
     log_event(job_id, "Manual room-outline correction submitted")
     background_tasks.add_task(
-        get_pipeline().run,
+        get_pipeline().prepare_floor_plan,
         job_id,
         floor_plan_path,
-        photo_paths,
         int(job.get("num_floors") or 1),
         (job.get("known_dimensions") or {}).get("width_meters"),
         (job.get("known_dimensions") or {}).get("length_meters"),
         None,
         manual_outline,
     )
+    return _public_job(get_job(job_id) or job)
+
+
+@app.get("/reconstructions/{job_id}/room-types")
+async def get_room_types(job_id: str):
+    from room_types import ROOM_TYPE_LABELS, ROOM_TYPES
+
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    review = load_room_type_review(job_id)
+    if not review:
+        raise HTTPException(
+            status_code=409,
+            detail="Room types are not available for this job yet",
+        )
+    floor_plan_result = _review_floor_plan(job_id)
+    rooms_by_id = {
+        int(room["id"]): room for room in floor_plan_result.get("rooms") or []
+    }
+    rooms = []
+    for entry in review.get("rooms") or []:
+        room_id = int(entry["room_id"])
+        room = rooms_by_id.get(room_id) or {}
+        rooms.append(
+            {
+                **entry,
+                "area_m2": room.get("area_m2"),
+                "bounds_m": room.get("bounds_m"),
+                "polygon_m": room.get("polygon_m") or room.get("polygon"),
+                "bounds_px": room.get("bounds_px"),
+                "center_px": room.get("center_px"),
+                "polygon_px": room.get("polygon_px"),
+            }
+        )
+    labels = review.get("room_type_labels") or ROOM_TYPE_LABELS
+    return {
+        "job_id": job_id,
+        "status": review.get("status"),
+        "job_status": job.get("status"),
+        "confirmed_at": review.get("confirmed_at"),
+        "requires_confirmation": bool(review.get("requires_confirmation")),
+        "source": review.get("source"),
+        "notes": review.get("notes"),
+        "footprint_m": floor_plan_result.get("footprint_m") or review.get("footprint_m"),
+        "footprint_px": floor_plan_result.get("footprint_px"),
+        "image_dimensions": floor_plan_result.get("image_dimensions"),
+        "scale_pixels_per_meter": floor_plan_result.get("scale_pixels_per_meter"),
+        "rooms": rooms,
+        "assignments": review.get("assignments") or [],
+        "labels": [
+            {"value": room_type, "label": labels.get(room_type, room_type)}
+            for room_type in ROOM_TYPES
+        ],
+        "style": review.get("style") or job.get("furnishing_style"),
+        "variant": review.get("variant") or job.get("furnishing_variant") or 0,
+        "floor_plan_url": f"/reconstructions/{job_id}/floor-plan",
+        "normalized_floor_plan_url": f"/reconstructions/{job_id}/diagnostics/floor_plan_normalized.png",
+    }
+
+
+def _queue_furnished_rebuild(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    style: str,
+    variant: int,
+):
+    update_job(
+        job_id,
+        status=JobStatus.QUEUED,
+        current_stage=JobStatus.QUEUED,
+        progress=0.0,
+        error=None,
+        error_code=None,
+        failed_stage=None,
+        assets=[],
+        warnings=[],
+        limitations=[],
+        cancel_requested=False,
+        review_required=False,
+        room_types_confirmed=True,
+        furnishing_style=style,
+        furnishing_variant=variant,
+        geometry_valid=None,
+        navigation_available=None,
+    )
+    background_tasks.add_task(
+        get_pipeline().reconstruct_furnished, job_id, style, variant
+    )
+
+
+def _review_is_editable(job: Dict) -> bool:
+    return job.get("status") in {
+        JobStatus.AWAITING_ROOM_TYPES,
+        JobStatus.COMPLETED,
+        JobStatus.FAILED,
+        JobStatus.CANCELLED,
+    }
+
+
+@app.post("/reconstructions/{job_id}/room-types", response_model=JobResponse)
+async def confirm_room_types(
+    job_id: str,
+    request: ConfirmRoomTypesRequest,
+    background_tasks: BackgroundTasks,
+):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not _review_is_editable(job):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Room types cannot be changed while the job is {job.get('status')}",
+        )
+    review = load_room_type_review(job_id)
+    if not review:
+        raise HTTPException(
+            status_code=409,
+            detail="No room-type review exists for this job; parse the floor plan first",
+        )
+    floor_plan_result = _review_floor_plan(job_id)
+    style = _validated_style(
+        request.style, job.get("furnishing_style") or review.get("style")
+    )
+    variant = _validated_variant(
+        request.variant,
+        job.get("furnishing_variant")
+        if job.get("furnishing_variant") is not None
+        else review.get("variant"),
+    )
+    try:
+        confirmed, _ = _apply_room_type_confirmation(
+            review,
+            floor_plan_result,
+            [entry.model_dump() for entry in request.rooms],
+            style,
+            variant,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    save_room_type_review(job_id, confirmed)
+    job = get_job(job_id) or job
+    update_job(
+        job_id,
+        room_types=_confirmed_room_types(confirmed),
+        room_types_confirmed=True,
+        room_type_review=_room_type_summary(confirmed),
+        room_count=len(confirmed.get("rooms") or []),
+    )
+    log_event(
+        job_id,
+        f"Room types confirmed for {len(confirmed.get('rooms') or [])} room(s); "
+        f"style {style}, variant {variant}",
+    )
+    _queue_furnished_rebuild(job_id, background_tasks, style, variant)
+    return _public_job(get_job(job_id) or job)
+
+
+@app.post("/reconstructions/{job_id}/furnishings", response_model=JobResponse)
+async def regenerate_furnishings(
+    job_id: str,
+    request: FurnishingRequest,
+    background_tasks: BackgroundTasks,
+):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not _review_is_editable(job):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Furnishings cannot be changed while the job is {job.get('status')}",
+        )
+    review = load_room_type_review(job_id)
+    if not review:
+        raise HTTPException(
+            status_code=409,
+            detail="No room-type review exists for this job; parse the floor plan first",
+        )
+    floor_plan_result = _review_floor_plan(job_id)
+    style = _validated_style(
+        request.style, job.get("furnishing_style") or review.get("style")
+    )
+    current_variant = (
+        job.get("furnishing_variant")
+        if job.get("furnishing_variant") is not None
+        else review.get("variant") or 0
+    )
+    if request.regenerate and request.variant is None:
+        variant = (int(current_variant) + 1) % (MAX_FURNISHING_VARIANT + 1)
+    else:
+        variant = _validated_variant(request.variant, current_variant)
+    if request.room_types:
+        try:
+            review, _ = _apply_room_type_confirmation(
+                review,
+                floor_plan_result,
+                [entry.model_dump() for entry in request.room_types],
+                style,
+                variant,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    elif review.get("status") != "confirmed":
+        raise HTTPException(
+            status_code=409,
+            detail="Confirm room types before regenerating furnishing",
+        )
+    else:
+        review = {**review, "style": style, "variant": variant}
+    save_room_type_review(job_id, review)
+    update_job(
+        job_id,
+        room_types=_confirmed_room_types(review),
+        room_types_confirmed=review.get("status") == "confirmed",
+        room_type_review=_room_type_summary(review),
+    )
+    log_event(
+        job_id,
+        f"Furnishing regeneration requested (style {style}, variant {variant})",
+    )
+    _queue_furnished_rebuild(job_id, background_tasks, style, variant)
+    return _public_job(get_job(job_id) or job)
+
+
+@app.patch("/reconstructions/{job_id}/rooms/{room_id}", response_model=JobResponse)
+async def update_room_type(
+    job_id: str,
+    room_id: int,
+    request: RoomUpdateRequest,
+    background_tasks: BackgroundTasks,
+):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not _review_is_editable(job):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Room types cannot be changed while the job is {job.get('status')}",
+        )
+    review = load_room_type_review(job_id)
+    if not review:
+        raise HTTPException(
+            status_code=409,
+            detail="No room-type review exists for this job; parse the floor plan first",
+        )
+    floor_plan_result = _review_floor_plan(job_id)
+    room_ids = {int(room["id"]) for room in floor_plan_result.get("rooms") or []}
+    if room_id not in room_ids:
+        raise HTTPException(status_code=404, detail="Room not found in this floor plan")
+    selections = review.get("assignments") or [
+        {
+            "room_id": int(entry["room_id"]),
+            "room_type": entry.get("room_type"),
+            "name": entry.get("name"),
+        }
+        for entry in review.get("rooms") or []
+    ]
+    if not selections:
+        raise HTTPException(
+            status_code=409, detail="No room-type selection exists for this job"
+        )
+    selections = [
+        {
+            "room_id": int(entry["room_id"]),
+            "room_type": entry.get("room_type"),
+            "name": entry.get("name"),
+        }
+        for entry in selections
+    ]
+    matched = False
+    for entry in selections:
+        if int(entry["room_id"]) == room_id:
+            entry["room_type"] = request.room_type
+            if request.name is not None:
+                entry["name"] = request.name
+            matched = True
+            break
+    if not matched:
+        raise HTTPException(status_code=404, detail="Room not found in this review")
+    style = _validated_style(
+        None, job.get("furnishing_style") or review.get("style")
+    )
+    variant = _validated_variant(
+        None,
+        job.get("furnishing_variant")
+        if job.get("furnishing_variant") is not None
+        else review.get("variant"),
+    )
+    try:
+        confirmed, _ = _apply_room_type_confirmation(
+            review, floor_plan_result, selections, style, variant
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    save_room_type_review(job_id, confirmed)
+    update_job(
+        job_id,
+        room_types=_confirmed_room_types(confirmed),
+        room_types_confirmed=True,
+        room_type_review=_room_type_summary(confirmed),
+    )
+    log_event(
+        job_id,
+        f"Room {room_id} changed to {request.room_type}; rebuild requested",
+    )
+    _queue_furnished_rebuild(job_id, background_tasks, style, variant)
     return _public_job(get_job(job_id) or job)
 
 
@@ -1724,6 +2926,16 @@ async def get_scene_metadata(job_id: str):
             f"({job.get('progress', 0):.0f}%)",
         )
     output_dir = OUTPUT_DIR / job_id
+    furniture = None
+    furniture_path = output_dir / "furniture.json"
+    if furniture_path.is_file():
+        try:
+            furniture = json.loads(furniture_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Furniture layout is malformed: {exc}",
+            ) from exc
     try:
         collision = json.loads((output_dir / "collision.json").read_text())
         room_graph = json.loads((output_dir / "room_graph.json").read_text())
@@ -1737,12 +2949,16 @@ async def get_scene_metadata(job_id: str):
     return {
         "job_id": job_id,
         "property_id": job.get("property_id"),
+        "workflow": manifest.get("workflow") or "photo_assisted",
         "model_url": f"/reconstructions/{job_id}/assets/scene.glb",
         "collision": collision,
         "room_graph": room_graph,
         "metadata": metadata,
         "manifest": manifest,
+        "room_types": manifest.get("room_types") or metadata.get("room_types") or [],
         "room_assignments": manifest.get("room_assignments", []),
+        "furniture": (furniture or {}).get("items") or [],
+        "furnishing": manifest.get("furnishing"),
         "photo_manifest": manifest.get("photo_manifest"),
     }
 
@@ -2073,6 +3289,11 @@ async def get_reconstruction_diagnostics(job_id: str):
             if key in floor_plan
         },
         "failure_report": failure_report,
+        "room_type_review": job.get("room_type_review")
+        or _room_type_summary(load_room_type_review(job_id)),
+        "room_types_confirmed": bool(job.get("room_types_confirmed")),
+        "furnishing_style": job.get("furnishing_style"),
+        "furniture_count": job.get("furniture_count"),
         "photo_review": (job.get("diagnostics") or {}).get("photo_review")
         or job.get("photo_review_summary"),
         "artifacts": artifacts,
@@ -2170,6 +3391,11 @@ async def get_reconstruction_report(job_id: str):
         "geometry_valid": job.get("geometry_valid"),
         "navigation_available": job.get("navigation_available"),
         "scale_verified": job.get("scale_verified"),
+        "room_types": job.get("room_types") or [],
+        "room_types_confirmed": bool(job.get("room_types_confirmed")),
+        "furnishing_style": job.get("furnishing_style"),
+        "furnishing_variant": job.get("furnishing_variant"),
+        "furniture_count": job.get("furniture_count"),
         "validation": validation,
         "error": job.get("error"),
         "error_code": job.get("error_code"),

@@ -39,6 +39,8 @@ DEFAULT_ROOM_MIN_SIDE_M = 3.2
 MIN_DOOR_M = 0.45
 MAX_DOOR_M = 2.2
 DOOR_ARC_THRESHOLD = 0.30
+MIN_USABLE_ROOM_AREA_M2 = 0.55
+MIN_USABLE_ROOM_SIDE_M = 0.45
 
 
 class FloorPlanParseError(Exception):
@@ -122,13 +124,21 @@ class ImprovedFloorPlanParser:
     # ------------------------------------------------------------------
     # Input validation
     # ------------------------------------------------------------------
-    async def validate_inputs(self, floor_plan_path: str, photo_paths: List[str]) -> Dict:
-        return await asyncio.to_thread(self._validate_inputs_sync, floor_plan_path, photo_paths)
+    async def validate_inputs(
+        self, floor_plan_path: str, photo_paths: Optional[List[str]] = None
+    ) -> Dict:
+        return await asyncio.to_thread(
+            self._validate_inputs_sync, floor_plan_path, photo_paths or []
+        )
 
-    def _validate_inputs_sync(self, floor_plan_path: str, photo_paths: List[str]) -> Dict:
+    def _validate_inputs_sync(
+        self, floor_plan_path: str, photo_paths: Optional[List[str]] = None
+    ) -> Dict:
+        photo_paths = list(photo_paths or [])
         result: Dict = {
             "floor_plan_valid": False,
-            "photos_valid": False,
+            "photos_valid": True,
+            "photos_required": False,
             "floor_plan": {},
             "photos": {"count": len(photo_paths), "valid_count": 0, "invalid": []},
             "errors": [],
@@ -189,8 +199,8 @@ class ImprovedFloorPlanParser:
             except (UnidentifiedImageError, OSError, ValueError) as exc:
                 result["photos"]["invalid"].append({"file": photo.name, "error": str(exc)})
         result["photos"]["valid_count"] = valid_photos
-        result["photos_valid"] = valid_photos == len(photo_paths) and valid_photos > 0
-        if valid_photos == 0:
+        result["photos_valid"] = valid_photos == len(photo_paths)
+        if photo_paths and valid_photos == 0:
             result["errors"].append("No readable property photographs were provided.")
         elif valid_photos < len(photo_paths):
             result["errors"].append(
@@ -446,6 +456,20 @@ class ImprovedFloorPlanParser:
         scale, scale_source, scale_verified = self._resolve_scale(
             walls_bbox, rooms, known_width, known_length, warnings
         )
+        rooms = self._drop_unusable_rooms(rooms, scale, warnings)
+        if not rooms:
+            return self._fail_with_diagnostics(
+                job_id,
+                diagnostics_dir,
+                image,
+                wall_mask,
+                built["barrier"],
+                "Only wall cavities or slivers were detected; no usable room remains. "
+                "Upload a clearer plan with visible room outlines.",
+                "no_usable_rooms",
+                warnings,
+                {"walls_bbox": walls_bbox, "mask": mask_meta},
+            )
 
         edge_mask = self._build_arc_edge_mask(gray, built["barrier"])
         openings, doorways, windows = self._classify_openings(
@@ -765,7 +789,11 @@ class ImprovedFloorPlanParser:
         if clusters:
             best_cluster = max(
                 clusters,
-                key=lambda cluster: (len(cluster), max(item["score"] for item in cluster)),
+                key=lambda cluster: (
+                    len(cluster),
+                    max(float(item["probe"].get("score") or 0) for item in cluster),
+                    max(item["score"] for item in cluster),
+                ),
             )
             cluster_size = len(best_cluster)
             cluster_count = len(clusters)
@@ -1417,6 +1445,44 @@ class ImprovedFloorPlanParser:
             (int(stats[label, cv2.CC_STAT_AREA]) for label in range(1, count)), default=0
         )
         return rooms, labels, {"border_area": int(border_area), "largest_area": int(largest_area)}
+
+    @staticmethod
+    def _drop_unusable_rooms(
+        rooms: List[Dict], scale: float, warnings: List[str]
+    ) -> List[Dict]:
+        """Remove wall cavities that are too narrow to be a real room.
+
+        Raster sealing sometimes leaves a thin strip between two wall runs.
+        Keeping it creates a phantom room that no player can enter.
+        """
+        if scale <= 0 or not rooms:
+            return rooms
+        kept: List[Dict] = []
+        dropped: List[Dict] = []
+        for room in rooms:
+            _, _, width_px, height_px = room["bounds_px"]
+            area_m2 = float(room["area_px"]) / (scale * scale)
+            min_side_m = min(width_px, height_px) / scale
+            if area_m2 < MIN_USABLE_ROOM_AREA_M2 or min_side_m < MIN_USABLE_ROOM_SIDE_M:
+                dropped.append(
+                    {
+                        "bounds_px": room["bounds_px"],
+                        "area_m2": round(area_m2, 2),
+                        "min_side_m": round(min_side_m, 2),
+                    }
+                )
+                continue
+            kept.append(room)
+        if dropped:
+            smallest = min(dropped, key=lambda entry: entry["area_m2"])
+            warnings.append(
+                f"Ignored {len(dropped)} wall cavity/sliver region(s) that are too small to "
+                f"be rooms (smallest {smallest['area_m2']} m², "
+                f"{smallest['min_side_m']} m wide)."
+            )
+        for index, room in enumerate(kept):
+            room["id"] = index
+        return kept
 
     # ------------------------------------------------------------------
     # Opening classification

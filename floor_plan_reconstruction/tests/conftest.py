@@ -86,4 +86,10 @@ def stub_pipeline(monkeypatch):
         async def reconstruct(self, *args, **kwargs):
             return None
 
+        async def prepare_floor_plan(self, *args, **kwargs):
+            return None
+
+        async def reconstruct_furnished(self, *args, **kwargs):
+            return None
+
     monkeypatch.setattr(main, "get_pipeline", lambda: NullPipeline())

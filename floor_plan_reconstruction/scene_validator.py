@@ -1,26 +1,51 @@
-"""
-Scene validation.
+"""Scene validation.
 
-The validator is the gate between "pipeline finished" and "job completed":
-it re-opens the exported GLB, checks that geometry is non-degenerate, that
-collision volumes exist, that the spawn point is walkable, and that the room
-graph is navigable. A job may only be marked completed when this passes.
+This module is the gate between "pipeline finished" and "job completed".  It
+re-opens the exported GLB and independently verifies the architecture, the
+furniture inside it, and that the player can walk from the spawn point to
+every room that the floor plan connects.  A job is only marked complete when
+these checks pass.
+
+Floor-plan-only jobs do not have photographs.  The legacy photo checks are
+retained for jobs created by the older photo-assisted workflow, but they are
+not part of the completion gate for a floor-plan-only scene.
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import math
 import struct
+from collections import deque
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import trimesh
 from PIL import Image
+from shapely import contains_xy
+from shapely.geometry import Point as ShapelyPoint
+from shapely.geometry import Polygon as ShapelyPolygon
+from shapely.geometry import box as shapely_box
+from shapely.ops import unary_union
 
-PLAYER_RADIUS = 0.25
+from furnishing import PLAYER_RADIUS, validate_furnishing
+
 MIN_FACE_AREA = 1e-7
 MAX_DEGENERATE_RATIO = 0.02
+NAV_GRID_M = 0.1
+APPROACH_M = 0.45
+REGION_MARGIN_M = 0.16
+
+REQUIRED_FURNISHED_TYPES = {
+    "living_room",
+    "bedroom",
+    "kitchen",
+    "bathroom",
+    "dining_room",
+    "entrance",
+}
+FURNISHABLE_TYPES = REQUIRED_FURNISHED_TYPES | {"balcony"}
 
 
 class SceneValidationError(Exception):
@@ -36,6 +61,7 @@ class SceneValidator:
         geometry_result: Dict,
         photo_manifest: Dict = None,
         floor_plan_result: Dict = None,
+        furnishing: Dict = None,
     ) -> Dict:
         return await asyncio.to_thread(
             self._validate_scene_sync,
@@ -43,6 +69,7 @@ class SceneValidator:
             geometry_result,
             photo_manifest,
             floor_plan_result,
+            furnishing,
         )
 
     def _validate_scene_sync(
@@ -51,6 +78,7 @@ class SceneValidator:
         geometry_result: Dict,
         photo_manifest: Dict = None,
         floor_plan_result: Dict = None,
+        furnishing: Dict = None,
     ) -> Dict:
         output_dir = Path(geometry_result.get("output_dir", ""))
         glb_path = output_dir / "scene.glb"
@@ -72,6 +100,7 @@ class SceneValidator:
             errors.append("Exported scene.glb is smaller than 1 KB (truncated or empty)")
 
         scene = None
+        glb_json: Dict = {}
         if checks["glb_size_plausible"]:
             try:
                 scene = trimesh.load(str(glb_path), force="scene")
@@ -79,6 +108,10 @@ class SceneValidator:
             except Exception as exc:
                 checks["glb_loadable"] = False
                 errors.append(f"scene.glb could not be loaded: {exc}")
+            try:
+                glb_json = self._read_glb_json(glb_path)
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                errors.append(f"scene.glb structure could not be inspected: {exc}")
 
         if scene is not None:
             meshes = list(scene.geometry.values())
@@ -118,7 +151,6 @@ class SceneValidator:
                 errors.append(
                     f"{degenerate} degenerate faces detected ({ratio:.1%} of geometry)"
                 )
-            checks["has_wall_material"] = checks.get("glb_loadable", False)
 
         metadata = self._load_json(output_dir / "metadata.json", errors, "metadata.json")
         if metadata:
@@ -126,31 +158,9 @@ class SceneValidator:
             checks["asset_job_match"] = metadata.get("job_id") == job_id
             if not checks["asset_job_match"]:
                 errors.append("metadata.json does not belong to this job")
-            textures = ((metadata.get("method") or {}).get("textures")) or {}
-            if textures.get("applied"):
-                try:
-                    glb_json = self._read_glb_json(glb_path)
-                    image_count = len(glb_json.get("images") or [])
-                    texture_count = len(glb_json.get("textures") or [])
-                    stats["embedded_images"] = image_count
-                    stats["embedded_textures"] = texture_count
-                    checks["photo_textures_embedded"] = (
-                        image_count > 0 and texture_count > 0
-                    )
-                except (OSError, ValueError, json.JSONDecodeError) as exc:
-                    checks["photo_textures_embedded"] = False
-                    errors.append(f"Could not inspect GLB texture data: {exc}")
-                if not checks.get("photo_textures_embedded", False):
-                    errors.append(
-                        "scene.glb does not embed the photographic textures claimed by "
-                        "metadata.json"
-                    )
-            else:
-                checks["photo_textures_embedded"] = True
         else:
             checks["metadata_file"] = False
             checks["asset_job_match"] = False
-            checks["photo_textures_embedded"] = False
 
         collision = self._load_json(collision_path, errors, "collision.json")
         if collision:
@@ -167,7 +177,9 @@ class SceneValidator:
             checks["spawn_present"] = bool(spawn and len(spawn) == 3)
             if checks["spawn_present"]:
                 x, _, z = spawn
-                checks["spawn_walkable"] = not self._point_hits_wall(x, z, walls)
+                checks["spawn_walkable"] = not self._point_hits_boxes(
+                    x, z, walls, PLAYER_RADIUS
+                )
                 stats["spawn"] = spawn
                 if not checks["spawn_walkable"]:
                     errors.append("Spawn point intersects a collision wall")
@@ -196,6 +208,7 @@ class SceneValidator:
             errors.append("collision.json is missing or malformed")
 
         graph = self._load_json(graph_path, errors, "room_graph.json")
+        graph_connected = False
         if graph:
             checks["room_graph"] = True
             nodes = graph.get("nodes", [])
@@ -213,41 +226,81 @@ class SceneValidator:
                 )
         else:
             checks["room_graph"] = False
-            graph_connected = False
             errors.append("room_graph.json is missing or malformed")
 
-        self._validate_photo_manifest(
-            job_id,
-            photo_manifest,
-            metadata or {},
+        rooms = self._scene_rooms(floor_plan_result or {}, graph or {})
+        doorways = self._scene_doorways(floor_plan_result or {}, collision or {})
+        windows = self._scene_windows(floor_plan_result or {})
+
+        furniture = self._validate_furniture(
+            output_dir,
+            geometry_result,
+            furnishing,
+            rooms,
+            doorways,
+            windows,
+            collision or {},
             graph or {},
-            floor_plan_result or {},
+            metadata or {},
+            glb_json,
             checks,
             errors,
+            warnings,
             stats,
         )
 
-        geometry_valid = all(
-            checks.get(name, False)
-            for name in (
-                "glb_exists",
-                "glb_size_plausible",
-                "glb_loadable",
-                "has_meshes",
-                "has_faces",
-                "finite_bounds",
-                "plausible_size",
-                "no_degenerate_faces",
-                "metadata_file",
-                "asset_job_match",
-                "photo_textures_embedded",
-                "collision_file",
-                "collision_walls",
-                "collision_walls_valid",
-                "spawn_present",
-                "spawn_walkable",
-                "room_graph",
-                "rooms_present",
+        navigation = self._validate_navigation(
+            collision or {},
+            graph or {},
+            rooms,
+            furniture,
+            checks,
+            errors,
+            warnings,
+            stats,
+        )
+
+        uses_photos = self._uses_photo_workflow(photo_manifest, metadata or {}, graph or {})
+        if uses_photos:
+            self._validate_photo_manifest(
+                job_id,
+                photo_manifest,
+                metadata or {},
+                graph or {},
+                floor_plan_result or {},
+                output_dir,
+                checks,
+                errors,
+                stats,
+            )
+        else:
+            checks["photo_free_workflow"] = True
+
+        required = [
+            "glb_exists",
+            "glb_size_plausible",
+            "glb_loadable",
+            "has_meshes",
+            "has_faces",
+            "finite_bounds",
+            "plausible_size",
+            "no_degenerate_faces",
+            "metadata_file",
+            "asset_job_match",
+            "collision_file",
+            "collision_walls",
+            "collision_walls_valid",
+            "spawn_present",
+            "spawn_walkable",
+            "room_graph",
+            "rooms_present",
+            "spawn_clearance",
+            "navigation_from_spawn",
+            "doorways_reachable",
+            "rooms_walkable",
+        ]
+        if uses_photos:
+            required += [
                 "photo_manifest",
                 "photo_manifest_scope",
                 "photo_review_confirmed",
@@ -257,9 +310,26 @@ class SceneValidator:
                 "room_photo_references",
                 "room_textures_match",
                 "texture_files_decode",
-            )
+                "photo_textures_embedded",
+            ]
+        else:
+            required.append("photo_free_workflow")
+        if furniture is not None:
+            required += [
+                "furniture_file",
+                "furniture_room_scope",
+                "furniture_items_present",
+                "furniture_placement_valid",
+                "furniture_glb_nodes",
+                "furniture_collision_match",
+            ]
+
+        geometry_valid = all(checks.get(name, False) for name in required)
+        navigation_available = bool(
+            geometry_valid
+            and navigation.get("all_connected_rooms_reachable")
+            and (graph_connected or len(graph.get("nodes", [])) <= 1)
         )
-        navigation_available = geometry_valid and bool(graph_connected or len(graph.get("nodes", [])) <= 1)
         return self._finish(
             job_id,
             output_dir,
@@ -271,6 +341,602 @@ class SceneValidator:
             navigation_available,
         )
 
+    # ------------------------------------------------------------------
+    # Furniture
+    # ------------------------------------------------------------------
+    def _validate_furniture(
+        self,
+        output_dir: Path,
+        geometry_result: Dict,
+        furnishing: Optional[Dict],
+        rooms: List[Dict],
+        doorways: List[Dict],
+        windows: List[Dict],
+        collision: Dict,
+        graph: Dict,
+        metadata: Dict,
+        glb_json: Dict,
+        checks: Dict,
+        errors: List[str],
+        warnings: List[str],
+        stats: Dict,
+    ) -> Optional[Dict]:
+        path = output_dir / "furniture.json"
+        payload = furnishing
+        if payload is None and path.exists():
+            payload = self._load_json(path, errors, "furniture.json")
+        expected = bool(payload) or bool(geometry_result.get("furniture_items"))
+        if not expected:
+            return None
+
+        if not payload:
+            checks["furniture_file"] = False
+            errors.append("Furniture layout is missing; the scene cannot be complete.")
+            return None
+        checks["furniture_file"] = True
+
+        items = list(payload.get("items") or [])
+        stats["furniture_items"] = len(items)
+        graph_rooms = {int(node.get("id")): node for node in graph.get("nodes", [])}
+        scope_ok = True
+        for item in items:
+            try:
+                room_id = int(item.get("room_id"))
+            except (TypeError, ValueError):
+                scope_ok = False
+                errors.append(f"Furniture item {item.get('id')!r} has no valid room id")
+                continue
+            if room_id not in graph_rooms:
+                scope_ok = False
+                errors.append(
+                    f"Furniture item {item.get('id')!r} references unknown room {room_id}"
+                )
+            if item.get("room_type") == "unknown":
+                scope_ok = False
+                errors.append(
+                    f"Furniture item {item.get('id')!r} was placed in an unspecified room"
+                )
+        checks["furniture_room_scope"] = scope_ok
+
+        if rooms:
+            validation = validate_furnishing(payload, rooms, doorways, windows)
+        else:
+            validation = {
+                "valid": False,
+                "issues": ["Room outlines are missing, so furniture containment cannot be verified."],
+                "navigation": {},
+                "checked_items": len(items),
+                "checked_rooms": 0,
+            }
+        checks["furniture_placement_valid"] = bool(validation.get("valid"))
+        stats["furniture_validation"] = {
+            "valid": bool(validation.get("valid")),
+            "issues": validation.get("issues", []),
+            "checked_items": validation.get("checked_items"),
+            "checked_rooms": validation.get("checked_rooms"),
+        }
+        for issue in validation.get("issues", [])[:20]:
+            errors.append(f"Furniture validation: {issue}")
+
+        required_rooms = {
+            int(node.get("id"))
+            for node in graph.get("nodes", [])
+            if str(node.get("room_type") or "unknown") in REQUIRED_FURNISHED_TYPES
+        }
+        furnished_rooms = {
+            int(entry.get("room_id"))
+            for entry in payload.get("rooms", [])
+            if entry.get("status") in ("furnished", "partially_furnished")
+        }
+        missing = sorted(required_rooms - furnished_rooms)
+        small_missing = []
+        for room_id in missing:
+            area = float(graph_rooms.get(room_id, {}).get("area_m2") or 0.0)
+            if area < 3.0:
+                small_missing.append(room_id)
+            else:
+                errors.append(
+                    f"Room {room_id} is a {graph_rooms.get(room_id, {}).get('room_type')} "
+                    "but received no furniture."
+                )
+        for room_id in small_missing:
+            warnings.append(
+                f"Room {room_id} is too small for standard furniture and was left clear."
+            )
+        missing_required = set(missing) - set(small_missing)
+        checks["furniture_items_present"] = (not required_rooms and not items) or (
+            bool(items) and not missing_required
+        )
+        if required_rooms and not items:
+            errors.append("Furniture layout contains no items.")
+
+        glb_items, glb_ok = self._glb_furniture_items(glb_json)
+        item_ids = {str(item.get("id")) for item in items}
+        missing_nodes = sorted(item_ids - glb_items)
+        orphan_nodes = sorted(glb_items - item_ids)
+        checks["furniture_glb_nodes"] = bool(glb_ok) and not missing_nodes and not orphan_nodes
+        stats["furniture_glb"] = {
+            "item_ids": len(item_ids),
+            "glb_item_ids": len(glb_items),
+            "missing": len(missing_nodes),
+            "orphans": len(orphan_nodes),
+            "materials": len(glb_json.get("materials") or []),
+        }
+        if not glb_ok:
+            errors.append("scene.glb node table could not be read for furniture verification")
+        if missing_nodes:
+            errors.append(
+                "Furniture is missing from scene.glb: " + ", ".join(missing_nodes[:10])
+            )
+        if orphan_nodes:
+            errors.append(
+                "scene.glb contains furniture nodes with no placement record: "
+                + ", ".join(orphan_nodes[:10])
+            )
+
+        collision_match, collision_count = self._check_furniture_collision(
+            items, collision.get("furniture") or []
+        )
+        checks["furniture_collision_match"] = collision_match
+        stats["furniture_collision_items"] = collision_count
+        if not collision_match:
+            errors.append(
+                "collision.json furniture volumes do not match the placed furniture "
+                "(missing, extra, or altered bounds)"
+            )
+
+        stats["furniture"] = {
+            "style": payload.get("style"),
+            "variant": payload.get("variant"),
+            "summary": payload.get("summary"),
+            "validation": validation.get("navigation"),
+        }
+        return {
+            "payload": payload,
+            "items": items,
+            "validation": validation,
+            "rooms": rooms,
+            "doorways": doorways,
+        }
+
+    def _glb_furniture_items(self, glb_json: Dict) -> Tuple[set, bool]:
+        nodes = glb_json.get("nodes")
+        if not isinstance(nodes, list):
+            return set(), False
+        found = set()
+        for node in nodes:
+            name = str(node.get("name") or "")
+            if not name.startswith("Furniture_"):
+                continue
+            item_id = name[len("Furniture_") :].split("__", 1)[0]
+            if item_id:
+                found.add(item_id)
+        return found, True
+
+    def _check_furniture_collision(
+        self, items: List[Dict], collision_items: List[Dict]
+    ) -> Tuple[bool, int]:
+        expected = {
+            str(item.get("id")): item
+            for item in items
+            if item.get("collision") and item.get("collision_bounds")
+        }
+        found = {}
+        for entry in collision_items:
+            item_id = str(entry.get("item_id"))
+            if item_id in found:
+                return False, len(collision_items)
+            found[item_id] = entry
+        if set(expected) != set(found):
+            return False, len(collision_items)
+        for item_id, item in expected.items():
+            entry = found[item_id]
+            bounds = item["collision_bounds"]
+            minimum = entry.get("min")
+            maximum = entry.get("max")
+            if (
+                not minimum
+                or not maximum
+                or len(minimum) != 2
+                or len(maximum) != 2
+                or not all(np.isfinite(minimum + maximum))
+            ):
+                return False, len(collision_items)
+            if any(
+                abs(float(a) - float(b)) > 0.015
+                for a, b in zip(minimum + maximum, bounds["min"] + bounds["max"])
+            ):
+                return False, len(collision_items)
+            if int(entry.get("room_id", -1)) != int(item.get("room_id", -2)):
+                return False, len(collision_items)
+        return True, len(collision_items)
+
+    # ------------------------------------------------------------------
+    # Navigation
+    # ------------------------------------------------------------------
+    def _validate_navigation(
+        self,
+        collision: Dict,
+        graph: Dict,
+        rooms: List[Dict],
+        furniture: Optional[Dict],
+        checks: Dict,
+        errors: List[str],
+        warnings: List[str],
+        stats: Dict,
+    ) -> Dict:
+        walls = list(collision.get("walls") or [])
+        doors = list(collision.get("doors") or [])
+        furniture_boxes = list(collision.get("furniture") or [])
+        spawn = (collision.get("spawn") or {}).get("position")
+        polygons = {
+            int(room["id"]): self._polygon(room)
+            for room in rooms
+            if room.get("id") is not None
+        }
+        polygons = {key: value for key, value in polygons.items() if value is not None}
+
+        if not walls or not spawn:
+            checks["spawn_clearance"] = False
+            checks["navigation_from_spawn"] = False
+            checks["doorways_reachable"] = False
+            checks["rooms_walkable"] = False
+            errors.append("Spawn point or collision walls are missing; navigation cannot be verified")
+            return {"all_connected_rooms_reachable": False}
+
+        x, _, z = spawn
+        spawn_blocked = self._point_hits_boxes(x, z, walls, PLAYER_RADIUS) or self._point_hits_boxes(
+            x, z, furniture_boxes, PLAYER_RADIUS
+        )
+        checks["spawn_clearance"] = not spawn_blocked
+        if spawn_blocked:
+            errors.append("Spawn point is inside a wall or piece of furniture")
+
+        grid = self._build_navigation_grid(walls, furniture_boxes, polygons, doors)
+        if grid is None:
+            checks["navigation_from_spawn"] = False
+            checks["doorways_reachable"] = False
+            checks["rooms_walkable"] = False
+            errors.append("Navigation grid could not be built for this floor plan")
+            return {"all_connected_rooms_reachable": False}
+
+        xs, zs, free = grid
+        start = self._nearest_free(free, xs, zs, (x, z), max_distance=0.4)
+        if start is None:
+            checks["navigation_from_spawn"] = False
+            checks["doorways_reachable"] = False
+            checks["rooms_walkable"] = False
+            errors.append("Spawn point has no walkable space around it")
+            return {"all_connected_rooms_reachable": False}
+
+        visited = np.zeros(free.shape, dtype=bool)
+        queue = deque([start])
+        visited[start] = True
+        while queue:
+            row, col = queue.popleft()
+            for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nr, nc = row + dr, col + dc
+                if 0 <= nr < free.shape[0] and 0 <= nc < free.shape[1]:
+                    if free[nr, nc] and not visited[nr, nc]:
+                        visited[nr, nc] = True
+                        queue.append((nr, nc))
+
+        reachable_cells = int(np.count_nonzero(visited))
+        checks["navigation_from_spawn"] = reachable_cells > 0
+        if reachable_cells == 0:
+            errors.append("No walkable cells are reachable from the spawn point")
+
+        grid_x, grid_z = np.meshgrid(xs, zs)
+        room_stats: Dict[str, Dict] = {}
+        for room_id, polygon in polygons.items():
+            inside = contains_xy(polygon, grid_x, grid_z)
+            reachable = int(np.count_nonzero(visited & inside))
+            usable = int(np.count_nonzero(free & inside))
+            room_stats[str(room_id)] = {
+                "reachable_cells": reachable,
+                "reachable_area_m2": round(reachable * NAV_GRID_M * NAV_GRID_M, 2),
+                "free_cells": usable,
+            }
+
+        connected_ids = self._connected_room_ids(graph, set(polygons))
+        unreachable_rooms = []
+        for room_id in sorted(connected_ids):
+            info = room_stats.get(str(room_id))
+            if info is None:
+                continue
+            if info["reachable_cells"] == 0:
+                unreachable_rooms.append(room_id)
+                errors.append(
+                    f"Room {room_id} cannot be reached from the spawn point; furniture or "
+                    "wall geometry blocks every route."
+                )
+        for room_id, polygon in polygons.items():
+            if room_id not in connected_ids and room_stats[str(room_id)]["reachable_cells"] == 0:
+                warnings.append(
+                    f"Room {room_id} has no connected doorway and cannot be reached."
+                )
+        checks["rooms_walkable"] = not unreachable_rooms
+        checks["all_connected_rooms_reachable"] = not unreachable_rooms
+
+        door_results: Dict[str, Dict] = {}
+        unreachable_doors = []
+        for door in doors:
+            approach_points = self._door_approach_points(door, polygons)
+            if not approach_points:
+                continue
+            results = []
+            for room_id, point in approach_points:
+                index = self._nearest_free(free, xs, zs, point, max_distance=0.4)
+                reachable = bool(index is not None and visited[index])
+                results.append(
+                    {
+                        "room_id": room_id,
+                        "point": [round(point[0], 3), round(point[1], 3)],
+                        "reachable": reachable,
+                    }
+                )
+                if index is None:
+                    errors.append(
+                        f"Doorway {door.get('id')} has no walkable space on the room {room_id} side."
+                    )
+                elif not reachable:
+                    errors.append(
+                        f"Doorway {door.get('id')} cannot be reached from the spawn point on the "
+                        f"room {room_id} side."
+                    )
+            door_results[str(door.get("id"))] = {"sides": results}
+            if any(not side["reachable"] for side in results):
+                unreachable_doors.append(door.get("id"))
+        checks["doorways_reachable"] = not unreachable_doors
+        if not doors:
+            warnings.append(
+                "The floor plan contains no walkable doorways; every room is an enclosed cell."
+            )
+
+        stats["navigation"] = {
+            "reachable_area_m2": round(reachable_cells * NAV_GRID_M * NAV_GRID_M, 2),
+            "grid_m": NAV_GRID_M,
+            "player_radius_m": PLAYER_RADIUS,
+            "rooms": room_stats,
+            "doors": door_results,
+            "connected_rooms": sorted(connected_ids),
+            "unreachable_rooms": unreachable_rooms,
+            "unreachable_doors": unreachable_doors,
+        }
+        return {
+            "all_connected_rooms_reachable": checks["rooms_walkable"]
+            and checks["doorways_reachable"],
+            "grid": grid,
+            "reachable": visited,
+            "rooms": room_stats,
+        }
+
+    def _build_navigation_grid(
+        self,
+        walls: List[Dict],
+        furniture: List[Dict],
+        polygons: Dict[int, ShapelyPolygon],
+        doors: Optional[List[Dict]] = None,
+    ):
+        if polygons:
+            walkable_regions = [polygon.buffer(REGION_MARGIN_M) for polygon in polygons.values()]
+            walkable_regions.extend(self._door_connector_patches(doors or []))
+            region = unary_union(walkable_regions)
+        else:
+            all_boxes = walls + furniture
+            if not all_boxes:
+                return None
+            min_x = min(float(entry["min"][0]) for entry in all_boxes) - 0.5
+            min_z = min(float(entry["min"][1]) for entry in all_boxes) - 0.5
+            max_x = max(float(entry["max"][0]) for entry in all_boxes) + 0.5
+            max_z = max(float(entry["max"][1]) for entry in all_boxes) + 0.5
+            from shapely.geometry import box as shapely_box
+
+            region = shapely_box(min_x, min_z, max_x, max_z)
+
+        min_x, min_z, max_x, max_z = region.bounds
+        if not all(np.isfinite([min_x, min_z, max_x, max_z])):
+            return None
+        xs = np.arange(min_x + NAV_GRID_M / 2, max_x, NAV_GRID_M)
+        zs = np.arange(min_z + NAV_GRID_M / 2, max_z, NAV_GRID_M)
+        if xs.size == 0 or zs.size == 0 or xs.size * zs.size > 2_500_000:
+            return None
+        grid_x, grid_z = np.meshgrid(xs, zs)
+        free = contains_xy(region, grid_x, grid_z)
+        for entry in walls:
+            free &= ~self._box_mask(grid_x, grid_z, entry, PLAYER_RADIUS)
+        for entry in furniture:
+            free &= ~self._box_mask(grid_x, grid_z, entry, PLAYER_RADIUS)
+        return xs, zs, free
+
+    @staticmethod
+    def _door_connector_patches(doors: List[Dict]) -> List[ShapelyPolygon]:
+        """Walkable strips that bridge the wall band at interior doorways.
+
+        Room polygons stop at the wall faces, so their buffers do not always
+        meet across a thick wall.  Without a connector the grid has no cells in
+        the doorway and every room behind it looks unreachable.
+        """
+        patches: List[ShapelyPolygon] = []
+        for door in doors:
+            adjacent = [room for room in (door.get("rooms") or []) if room is not None]
+            if door.get("exterior") or len(set(adjacent)) < 2:
+                continue
+            center = door.get("position") or door.get("center_m") or [0.0, 0.0]
+            width = float(door.get("width_m") or door.get("detected_width_m") or 0.0)
+            if not width or width <= 0:
+                continue
+            try:
+                cx, cz = float(center[0]), float(center[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            half_span = max(0.3, width / 2.0)
+            half_depth = max(0.55, REGION_MARGIN_M + 0.4)
+            if str(door.get("orientation") or "horizontal") == "horizontal":
+                patch = shapely_box(cx - half_span, cz - half_depth, cx + half_span, cz + half_depth)
+            else:
+                patch = shapely_box(cx - half_depth, cz - half_span, cx + half_depth, cz + half_span)
+            if not patch.is_empty:
+                patches.append(patch)
+        return patches
+
+    @staticmethod
+    def _box_mask(grid_x: np.ndarray, grid_z: np.ndarray, entry: Dict, margin: float):
+        minimum = entry.get("min") or [0.0, 0.0]
+        maximum = entry.get("max") or [0.0, 0.0]
+        return (
+            (grid_x >= float(minimum[0]) - margin)
+            & (grid_x <= float(maximum[0]) + margin)
+            & (grid_z >= float(minimum[1]) - margin)
+            & (grid_z <= float(maximum[1]) + margin)
+        )
+
+    @staticmethod
+    def _nearest_free(
+        free: np.ndarray,
+        xs: np.ndarray,
+        zs: np.ndarray,
+        point: Sequence[float],
+        max_distance: float = 0.35,
+    ):
+        col = int(np.argmin(np.abs(xs - float(point[0]))))
+        row = int(np.argmin(np.abs(zs - float(point[1]))))
+        if 0 <= row < free.shape[0] and 0 <= col < free.shape[1] and free[row, col]:
+            return row, col
+        best = None
+        best_distance = float("inf")
+        radius = int(math.ceil(max_distance / NAV_GRID_M))
+        for dr in range(-radius, radius + 1):
+            for dc in range(-radius, radius + 1):
+                nr, nc = row + dr, col + dc
+                if 0 <= nr < free.shape[0] and 0 <= nc < free.shape[1] and free[nr, nc]:
+                    distance = math.hypot(xs[nc] - point[0], zs[nr] - point[1])
+                    if distance < best_distance:
+                        best_distance = distance
+                        best = (nr, nc)
+        return best if best_distance <= max_distance else None
+
+    @staticmethod
+    def _door_approach_points(
+        door: Dict, polygons: Dict[int, ShapelyPolygon]
+    ) -> List[Tuple[int, Tuple[float, float]]]:
+        center = door.get("position") or door.get("center_m") or [0.0, 0.0]
+        orientation = str(door.get("orientation") or "horizontal")
+        if orientation == "horizontal":
+            offsets = ((0.0, APPROACH_M), (0.0, -APPROACH_M))
+        else:
+            offsets = ((APPROACH_M, 0.0), (-APPROACH_M, 0.0))
+        adjacent = [int(room) for room in (door.get("rooms") or []) if room is not None]
+        points: List[Tuple[int, Tuple[float, float]]] = []
+        for room_id in adjacent:
+            polygon = polygons.get(room_id)
+            picked = None
+            for distance in (APPROACH_M, 0.35, 0.25):
+                for dx, dz in offsets:
+                    scale = distance / APPROACH_M
+                    point = (float(center[0]) + dx * scale, float(center[1]) + dz * scale)
+                    if polygon is None or polygon.buffer(0.05).covers(
+                        ShapelyPoint(point[0], point[1])
+                    ):
+                        picked = point
+                        break
+                if picked:
+                    break
+            if picked:
+                points.append((room_id, picked))
+        return points
+
+    @staticmethod
+    def _connected_room_ids(graph: Dict, known: set) -> set:
+        nodes = [int(node.get("id")) for node in graph.get("nodes", [])]
+        degree = {room_id: 0 for room_id in nodes}
+        for edge in graph.get("edges", []):
+            for key in ("from", "to"):
+                value = edge.get(key)
+                if value is None:
+                    continue
+                try:
+                    room_id = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if room_id in degree:
+                    degree[room_id] += 1
+        if graph.get("connected"):
+            return {room_id for room_id in nodes if room_id in known}
+        return {room_id for room_id, count in degree.items() if count > 0 and room_id in known}
+
+    # ------------------------------------------------------------------
+    # Scene room data
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _polygon(room: Dict) -> Optional[ShapelyPolygon]:
+        points = room.get("polygon_m") or room.get("polygon") or []
+        if len(points) < 3:
+            bounds = room.get("bounds_m") or room.get("bounds")
+            if not bounds or len(bounds) < 4:
+                return None
+            x, z, w, d = bounds
+            points = [[x, z], [x + w, z], [x + w, z + d], [x, z + d]]
+        polygon = ShapelyPolygon([(float(px), float(pz)) for px, pz in points])
+        if not polygon.is_valid:
+            polygon = polygon.buffer(0)
+        return None if polygon.is_empty else polygon
+
+    def _scene_rooms(self, floor_plan_result: Dict, graph: Dict) -> List[Dict]:
+        rooms = list(floor_plan_result.get("rooms") or [])
+        if rooms:
+            return rooms
+        for node in graph.get("nodes", []):
+            bounds = node.get("bounds") or [0, 0, 0, 0]
+            rooms.append(
+                {
+                    "id": int(node.get("id")),
+                    "polygon_m": node.get("polygon") or node.get("polygon_m"),
+                    "bounds_m": bounds,
+                    "center_m": node.get("center"),
+                    "area_m2": node.get("area_m2"),
+                    "room_type": node.get("room_type"),
+                }
+            )
+        return rooms
+
+    @staticmethod
+    def _scene_doorways(floor_plan_result: Dict, collision: Dict) -> List[Dict]:
+        doorways = list(floor_plan_result.get("doorways") or [])
+        if doorways:
+            return doorways
+        result = []
+        for door in collision.get("doors", []):
+            result.append(
+                {
+                    "id": door.get("id"),
+                    "center_m": door.get("position"),
+                    "width_m": door.get("width_m"),
+                    "orientation": door.get("orientation"),
+                    "rooms": door.get("rooms") or [],
+                    "kind": "door",
+                }
+            )
+        return result
+
+    @staticmethod
+    def _scene_windows(floor_plan_result: Dict) -> List[Dict]:
+        return list(floor_plan_result.get("windows") or [])
+
+    # ------------------------------------------------------------------
+    # Legacy photo workflow
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _uses_photo_workflow(
+        photo_manifest: Optional[Dict], metadata: Dict, graph: Dict
+    ) -> bool:
+        if photo_manifest is not None:
+            return True
+        textures = ((metadata.get("method") or {}).get("textures")) or {}
+        if textures.get("applied"):
+            return True
+        return any(node.get("photo_ids") for node in graph.get("nodes", []))
+
     def _validate_photo_manifest(
         self,
         job_id: str,
@@ -278,6 +944,7 @@ class SceneValidator:
         metadata: Dict,
         graph: Dict,
         floor_plan_result: Dict,
+        output_dir: Path,
         checks: Dict,
         errors: List[str],
         stats: Dict,
@@ -301,9 +968,28 @@ class SceneValidator:
                 "room_photo_references",
                 "room_textures_match",
                 "texture_files_decode",
+                "photo_textures_embedded",
             ):
                 checks[name] = False
             return
+
+        textures = ((metadata.get("method") or {}).get("textures")) or {}
+        if textures.get("applied"):
+            try:
+                glb_json = self._read_glb_json(output_dir / "scene.glb")
+            except (OSError, ValueError, json.JSONDecodeError):
+                glb_json = {}
+            image_count = len(glb_json.get("images") or [])
+            texture_count = len(glb_json.get("textures") or [])
+            stats["embedded_images"] = image_count
+            stats["embedded_textures"] = texture_count
+            checks["photo_textures_embedded"] = image_count > 0 and texture_count > 0
+            if not checks["photo_textures_embedded"]:
+                errors.append(
+                    "scene.glb does not embed the photographic textures claimed by metadata.json"
+                )
+        else:
+            checks["photo_textures_embedded"] = True
 
         photos = photo_manifest.get("photos", [])
         checks["photo_manifest_scope"] = photo_manifest.get("job_id") == job_id and all(
@@ -404,7 +1090,6 @@ class SceneValidator:
                     )
         checks["room_photo_references"] = references_valid
 
-        textures = ((metadata.get("method") or {}).get("textures")) or {}
         texture_map = textures.get("room_map") or {}
         textures_match = True
         for raw_room_id, entry in texture_map.items():
@@ -469,6 +1154,9 @@ class SceneValidator:
                     )
         checks["texture_files_decode"] = texture_files_decode
 
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
     def _finish(
         self,
         job_id: str,
@@ -522,10 +1210,13 @@ class SceneValidator:
             errors.append(f"{label} is malformed: {exc}")
             return {}
 
-    def _point_hits_wall(self, x: float, z: float, walls: List[Dict], margin: float = PLAYER_RADIUS) -> bool:
-        for wall in walls:
-            minimum = wall.get("min", [0, 0])
-            maximum = wall.get("max", [0, 0])
+    @staticmethod
+    def _point_hits_boxes(
+        x: float, z: float, boxes: List[Dict], margin: float
+    ) -> bool:
+        for entry in boxes:
+            minimum = entry.get("min", [0, 0])
+            maximum = entry.get("max", [0, 0])
             if (
                 minimum[0] - margin <= x <= maximum[0] + margin
                 and minimum[1] - margin <= z <= maximum[1] + margin

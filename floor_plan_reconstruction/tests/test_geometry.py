@@ -227,7 +227,7 @@ def test_geometry_exports_a_loadable_glb(fixture_plan, fixture_photos, cleanup_j
     assert metadata["scale"]["verified"] is True
     assert metadata["rooms"] == 4
     assert metadata["num_floors"] == 1
-    assert {entry["name"] for entry in metadata["room_assignments"]} == {
+    assert {entry["name"] for entry in metadata["room_types"]} == {
         "Living room",
         "Kitchen",
         "Bedroom 1",
@@ -261,17 +261,13 @@ def test_geometry_exports_a_loadable_glb(fixture_plan, fixture_photos, cleanup_j
     assert geometry["rooms_count"] == 4
     assert geometry["collision_walls"] >= 4
     assert any("Only axis-aligned" in item for item in geometry["limitations"])
-    assert any("Door leaves, stairs and furniture" in item for item in geometry["limitations"])
+    assert any("Door leaves and stairs are not reconstructed" in item for item in geometry["limitations"])
     if floor_plan.get("windows"):
         assert any("window" in item.lower() for item in geometry["limitations"])
         assert metadata["windows_included"] == len(floor_plan["windows"])
         assert "Windows" in scene.geometry
     assert any(
-        "assigned to rooms through classification" in item
-        for item in geometry["limitations"]
-    )
-    assert any(
-        "complete room photographs are not mapped onto floor or ceiling" in item
+        "Wall textures are real crops from photographs" in item
         for item in geometry["limitations"]
     )
     assert floor_plan["scale_verified"] is True

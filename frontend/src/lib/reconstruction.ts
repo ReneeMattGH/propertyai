@@ -35,123 +35,121 @@ export interface ReconstructionJob {
   retry_count?: number | null
   cancel_requested?: boolean | null
   manual_outline?: ManualOutline | null
-  review_url?: string | null
   review_required?: boolean | null
-  assignments_confirmed?: boolean | null
   room_count?: number | null
-  photo_review_summary?: PhotoReviewSummary | null
-  classifier?: Record<string, unknown> | null
+  room_types_url?: string | null
+  room_types_confirmed?: boolean | null
+  room_type_review?: RoomTypeReviewSummary | null
+  room_types?: RoomTypeEntry[] | null
+  furnishing_style?: string | null
+  furnishing_variant?: number | null
+  furniture_count?: number | null
+  furniture_url?: string | null
 }
 
-export interface PhotoClassification {
-  status: string
-  model?: string | null
-  predicted_room_type?: string | null
-  predicted_label?: string | null
-  confidence?: number | null
-  ambiguous?: boolean | null
-  candidates?: { room_type: string; label?: string; score: number }[]
-  error?: string | null
-  classified_at?: string | null
-}
-
-export interface PhotoSuggestion {
-  status: string
-  room_id?: number | null
-  confidence?: number | null
-  reason?: string | null
-}
-
-export interface ReviewPhoto {
-  photo_id: string
-  original_filename: string
-  mime_type?: string | null
-  width?: number | null
-  height?: number | null
-  aspect_ratio?: number | null
-  orientation?: string | null
-  thumbnail_url: string
-  preview_url: string
-  original_url: string
-  classification: PhotoClassification
-  room_assignment: {
-    room_id: number | null
-    confirmed: boolean
-    excluded: boolean
-    confirmed_at?: string | null
-  }
-  match: {
-    status: string
-    room_id?: number | null
-    confidence?: number | null
-    reason?: string | null
-  }
-  quality?: {
-    brightness?: number | null
-    contrast?: number | null
-    sharpness?: number | null
-    duplicate_of?: string | null
-    warnings?: string[]
-  }
-  camera?: Record<string, unknown>
-  visible?: Record<string, unknown>
-  processing: { status: string; errors: string[] }
-  suggestion?: PhotoSuggestion | null
-  assigned_room?: ReviewRoom | null
-}
-
-export interface ReviewRoom {
+export interface RoomTypeEntry {
   room_id: number
-  default_name: string
+  room_type: string
+  name?: string | null
+  confidence?: number | null
+  needs_confirmation?: boolean | null
+  source?: string | null
+  alternatives?: { room_type: string; score: number }[]
+  reasons?: string[]
   area_m2?: number | null
-  center_m?: [number, number] | null
   bounds_m?: [number, number, number, number] | null
-  polygon_m?: [number, number][]
-  name: string
-  room_type?: string | null
-  assigned_photo_ids: string[]
-  assigned_photo_count: number
-  has_photos: boolean
+  bounds_px?: [number, number, number, number] | null
+  center_px?: [number, number] | null
+  polygon_px?: [number, number][] | null
+  polygon_m?: [number, number][] | null
+  polygon?: [number, number][] | null
 }
 
-export interface PhotoReviewSummary {
-  total: number
-  ready: number
-  assigned: number
-  excluded: number
-  rejected: number
-  needs_review: number
-  rooms?: number
-  rooms_without_photos?: number
-  ambiguous_photos?: number
-  unavailable_photos?: number
+export interface RoomTypeReviewSummary {
+  status?: string | null
+  source?: string | null
+  requires_confirmation?: boolean | null
+  rooms?: number | null
+  uncertain_rooms?: number[] | null
+  confirmed_at?: string | null
 }
 
-export interface PhotoReview {
+export interface RoomTypeOption {
+  value: string
+  label: string
+}
+
+export interface RoomTypeSelection {
+  room_id: number
+  room_type: string
+  name?: string | null
+}
+
+export interface RoomTypeReview {
   job_id: string
-  property_id?: string | null
   status: string
-  rooms: ReviewRoom[]
-  photos: ReviewPhoto[]
-  summary: PhotoReviewSummary
-  assignment_required: boolean
-  confirmed: boolean
-  classifier?: Record<string, unknown> | null
-  room_types: string[]
-  room_type_labels: Record<string, string>
-  plan: {
-    scale_pixels_per_meter?: number | null
-    scale_source?: string | null
-    scale_verified?: boolean | null
-    footprint_m?: Record<string, number> | null
-    floor_plan_url: string
-  }
+  job_status: string
+  confirmed_at?: string | null
+  requires_confirmation: boolean
+  source?: string | null
+  notes?: string | null
+  footprint_m?: Record<string, number> | null
+  footprint_px?: { x: number; y: number; width: number; height: number } | null
+  image_dimensions?: [number, number] | null
+  scale_pixels_per_meter?: number | null
+  rooms: RoomTypeEntry[]
+  assignments: RoomTypeSelection[]
+  labels: RoomTypeOption[]
+  style?: string | null
+  variant?: number | null
+  floor_plan_url: string
+  normalized_floor_plan_url?: string | null
 }
 
-export interface PhotoAssignmentInput {
-  photo_id: string
-  room_id?: number | null
-  excluded?: boolean
+export interface FurnitureItem {
+  id: string
+  room_id: number
+  room_type?: string | null
+  room_name?: string | null
+  asset_id: string
+  model_id?: string | null
+  label: string
+  position: [number, number, number]
+  rotation_deg: number
+  rotation?: number
+  scale: [number, number, number]
+  size_m?: [number, number, number]
+  height_m?: number | null
+  footprint?: { min: [number, number]; max: [number, number] } | null
+  bbox?: { min: [number, number, number]; max: [number, number, number] } | null
+  collision: boolean
+  collision_bounds?: { min: [number, number]; max: [number, number] } | null
+  materials?: string[]
+  material_style?: string
+  placement?: string
+  wall?: string | null
+  parent_item_id?: string | null
+  status?: string
+}
+
+export interface FurnishingSummary {
+  items?: number
+  collision_items?: number
+  rooms_total?: number
+  rooms_furnished?: number
+  rooms_unspecified?: number
+  skipped_required?: number
+  style?: string
+  variant?: number
+}
+
+export interface Furnishing {
+  style?: string
+  style_label?: string
+  variant?: number
+  summary?: FurnishingSummary
+  materials?: Record<string, string>
+  limits?: Record<string, unknown>
 }
 
 export interface ManualRoomOutline {
@@ -195,6 +193,10 @@ export interface JobDiagnostics {
   manual_plan_supported: boolean
   manual_outline?: ManualOutline | null
   retry_supported: boolean
+  room_type_review?: RoomTypeReviewSummary | null
+  room_types_confirmed?: boolean | null
+  furnishing_style?: string | null
+  furniture_count?: number | null
 }
 
 export interface AssetEntry {
@@ -221,11 +223,23 @@ export interface CollisionRoom {
   area_m2?: number
 }
 
+export interface CollisionFurniture {
+  item_id: string
+  room_id: number
+  asset_id: string
+  label: string
+  min: [number, number]
+  max: [number, number]
+  height_m?: number | null
+}
+
 export interface CollisionData {
   units: string
   walls: { min: [number, number]; max: [number, number]; exterior?: boolean }[]
   doors: Doorway[]
   rooms: CollisionRoom[]
+  furniture?: CollisionFurniture[]
+  furniture_style?: string
   spawn: { position: [number, number, number]; yaw: number }
   footprint?: { width: number; height: number }
   wall_height: number
@@ -240,9 +254,16 @@ export interface RoomGraphNode {
   bounds: [number, number, number, number]
   area_m2?: number
   polygon?: [number, number][]
-  photo_ids?: string[]
-  photo_count?: number
-  photos?: { photo_id: string; thumbnail_url: string | null }[]
+  furniture?: {
+    id: string
+    asset_id: string
+    label: string
+    position: [number, number, number]
+    rotation_deg: number
+    collision: boolean
+  }[]
+  furniture_count?: number
+  furnishing_status?: string | null
 }
 
 export interface RoomGraph {
@@ -271,6 +292,7 @@ export interface SceneMetadata {
   method?: {
     layout?: string
     appearance?: string
+    furniture?: string
     photogrammetry_used_for_geometry?: boolean
     textures?: { applied?: boolean; count?: number }
     image_reconstruction?: Record<string, unknown>
@@ -283,27 +305,29 @@ export interface RoomAssignment {
   room_id: number
   name: string
   room_type?: string | null
-  photos: string[]
+  area_m2?: number | null
+  furniture_ids?: string[]
+  furniture_count?: number
+  furnishing_status?: string | null
   [key: string]: unknown
 }
 
 export interface SceneBundle {
   job_id: string
+  workflow?: string
   model_url: string
   collision: CollisionData
   room_graph: RoomGraph
   metadata: SceneMetadata
+  room_types?: RoomTypeEntry[]
   room_assignments?: RoomAssignment[]
-  photo_manifest?: PhotoReview | Record<string, unknown> | null
+  furniture?: FurnitureItem[]
+  furnishing?: Furnishing
   manifest: {
+    schema_version?: string
+    workflow?: string
     generated_at?: string
     method?: Record<string, unknown>
-    photogrammetry?: {
-      status?: string
-      registered_images?: number
-      input_images?: number
-      sparse_points?: number
-    } | null
     textures?: { count?: number; applied?: boolean } | null
     warnings?: string[]
     limitations?: string[]
@@ -313,7 +337,22 @@ export interface SceneBundle {
 
 export interface EngineHealth {
   status: string
-  dependencies?: Record<string, unknown>
+  dependencies?: {
+    pdf_floor_plans?: boolean
+    furnishing?: {
+      asset_library_size?: number
+      styles?: string[]
+      requires_external_vision_api?: boolean
+    }
+    [key: string]: unknown
+  }
+}
+
+export interface FurnishingUpdate {
+  style?: string
+  variant?: number
+  room_types?: RoomTypeSelection[]
+  regenerate?: boolean
 }
 
 async function errorMessage(response: Response): Promise<string> {
@@ -341,80 +380,6 @@ export function assetUrl(path: string): string {
   return `${RECONSTRUCTION_URL}${path.startsWith('/') ? path : `/${path}`}`
 }
 
-export async function fetchPhotoReview(
-  jobId: string,
-  signal?: AbortSignal,
-): Promise<PhotoReview> {
-  const response = await fetch(reconstructionPath(jobId, '/review'), {
-    signal,
-    cache: 'no-store',
-  })
-  if (!response.ok) {
-    throw new Error(await errorMessage(response))
-  }
-  return response.json()
-}
-
-export async function confirmPhotoAssignments(
-  jobId: string,
-  assignments: PhotoAssignmentInput[],
-  roomTypes: Record<string, string>,
-): Promise<ReconstructionJob> {
-  const response = await fetch(reconstructionPath(jobId, '/confirm-assignments'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ assignments, room_types: roomTypes }),
-  })
-  if (!response.ok) {
-    throw new Error(await errorMessage(response))
-  }
-  return response.json()
-}
-
-export async function addReviewPhoto(jobId: string, file: File): Promise<PhotoReview> {
-  const form = new FormData()
-  form.append('photo', file)
-  const response = await fetch(reconstructionPath(jobId, '/photos'), {
-    method: 'POST',
-    body: form,
-  })
-  if (!response.ok) {
-    throw new Error(await errorMessage(response))
-  }
-  return response.json()
-}
-
-export async function replaceReviewPhoto(
-  jobId: string,
-  photoId: string,
-  file: File,
-): Promise<PhotoReview> {
-  const form = new FormData()
-  form.append('photo', file)
-  const response = await fetch(
-    reconstructionPath(jobId, `/photos/${encodeURIComponent(photoId)}/replace`),
-    { method: 'POST', body: form },
-  )
-  if (!response.ok) {
-    throw new Error(await errorMessage(response))
-  }
-  return response.json()
-}
-
-export async function removeReviewPhoto(
-  jobId: string,
-  photoId: string,
-): Promise<PhotoReview> {
-  const response = await fetch(
-    reconstructionPath(jobId, `/photos/${encodeURIComponent(photoId)}`),
-    { method: 'DELETE' },
-  )
-  if (!response.ok) {
-    throw new Error(await errorMessage(response))
-  }
-  return response.json()
-}
-
 export async function fetchEngineHealth(signal?: AbortSignal): Promise<EngineHealth> {
   const response = await fetch(`${RECONSTRUCTION_URL}/health`, { signal, cache: 'no-store' })
   if (!response.ok) {
@@ -433,6 +398,76 @@ export async function fetchJob(jobId: string, signal?: AbortSignal): Promise<Rec
 
 export async function fetchScene(jobId: string, signal?: AbortSignal): Promise<SceneBundle> {
   const response = await fetch(reconstructionPath(jobId, '/scene'), { signal, cache: 'no-store' })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response))
+  }
+  return response.json()
+}
+
+export async function fetchRoomTypes(
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<RoomTypeReview> {
+  const response = await fetch(reconstructionPath(jobId, '/room-types'), {
+    signal,
+    cache: 'no-store',
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response))
+  }
+  return response.json()
+}
+
+export async function confirmRoomTypes(
+  jobId: string,
+  rooms: RoomTypeSelection[],
+  style?: string,
+  variant?: number,
+): Promise<ReconstructionJob> {
+  const response = await fetch(reconstructionPath(jobId, '/room-types'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      rooms,
+      ...(style ? { style } : {}),
+      ...(variant !== undefined ? { variant } : {}),
+    }),
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response))
+  }
+  return response.json()
+}
+
+export async function updateFurnishings(
+  jobId: string,
+  update: FurnishingUpdate,
+): Promise<ReconstructionJob> {
+  const response = await fetch(reconstructionPath(jobId, '/furnishings'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(update),
+  })
+  if (!response.ok) {
+    throw new Error(await errorMessage(response))
+  }
+  return response.json()
+}
+
+export async function updateRoomType(
+  jobId: string,
+  roomId: number,
+  roomType: string,
+  name?: string,
+): Promise<ReconstructionJob> {
+  const response = await fetch(
+    reconstructionPath(jobId, `/rooms/${encodeURIComponent(String(roomId))}`),
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ room_type: roomType, ...(name !== undefined ? { name } : {}) }),
+    },
+  )
   if (!response.ok) {
     throw new Error(await errorMessage(response))
   }

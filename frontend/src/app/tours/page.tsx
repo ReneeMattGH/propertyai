@@ -100,7 +100,7 @@ export default function ToursPage() {
           <div className="rounded-lg bg-gray-800 p-10 text-center">
             <h2 className="text-lg font-semibold text-white">No reconstructions yet</h2>
             <p className="mt-2 text-sm text-gray-400">
-              Upload a floor plan and photographs to create your first walkthrough.
+              Upload a floor plan to create your first automatically furnished walkthrough.
             </p>
             <Link
               href="/create-tour"
@@ -119,7 +119,8 @@ export default function ToursPage() {
                       {job.project_name || 'Untitled reconstruction'}
                     </h2>
                     <p className="mt-1 text-xs text-gray-500">
-                      {new Date(job.created_at).toLocaleString()} · {job.photo_count ?? 0} photos
+                      {new Date(job.created_at).toLocaleString()} · {job.room_count ?? 0} rooms ·{' '}
+                      {job.furniture_count ?? 0} furniture items
                     </p>
                   </div>
                   <span
@@ -130,6 +131,7 @@ export default function ToursPage() {
                 </div>
 
                 <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400">
+                  <span>Style: {job.furnishing_style ?? 'modern'}</span>
                   <span>Scale: {job.scale_verified ? 'measured' : 'estimated'}</span>
                   <span>Geometry: {job.geometry_valid ? 'validated' : job.status === 'completed' ? 'unknown' : 'not validated'}</span>
                   <span>Navigation: {job.navigation_available ? 'full' : 'partial/none'}</span>

@@ -1,10 +1,11 @@
 /**
- * Mobile walkthrough test.
+ * Mobile walkthrough test for a floor-plan-only furnished reconstruction.
  *
- * Opens the most recent completed reconstruction in a touch-emulated Chromium
- * context, confirms the joystick appears (pointer: coarse), drags it with real
- * CDP touch events, checks the player moved, then drags across the canvas and
- * checks the view yaw changed. Saves a screenshot.
+ * Opens the most furnished completed job in a touch-emulated Chromium context,
+ * verifies no photo flow is involved, confirms the viewer reports the job's real
+ * furniture count and current-room contents, drives the joystick with real CDP
+ * touch events, checks the player moved, drags across the canvas to rotate the
+ * view, and toggles real furniture visibility with taps. Saves a screenshot.
  *
  * Prerequisites: reconstruction engine on :8002 and Next.js on :3000.
  * Usage: node scripts/e2e-mobile.mjs [jobId]
@@ -50,14 +51,33 @@ function findChromium() {
   throw new Error('No Chromium found. Run `npx playwright install chromium` or set CHROMIUM_PATH.')
 }
 
-async function resolveJobId() {
-  if (process.argv[2]) return process.argv[2]
-  const response = await fetch(`${engineUrl}/reconstructions?limit=20`)
+async function resolveJob() {
+  if (process.argv[2]) {
+    const response = await fetch(`${engineUrl}/reconstructions/${process.argv[2]}`)
+    if (!response.ok) throw new Error(`Job ${process.argv[2]} not found`)
+    return response.json()
+  }
+  const response = await fetch(`${engineUrl}/reconstructions?limit=30`)
   if (!response.ok) throw new Error(`Engine not reachable at ${engineUrl}`)
   const jobs = await response.json()
-  const completed = jobs.find((job) => job.status === 'completed')
-  if (!completed) throw new Error('No completed reconstruction found; run the desktop E2E first')
-  return completed.job_id
+  const completed = jobs.filter(
+    (job) =>
+      job.status === 'completed' &&
+      job.photo_count === 0 &&
+      job.navigation_available === true &&
+      (job.furniture_count ?? 0) > 0,
+  )
+  completed.sort((a, b) => (b.furniture_count ?? 0) - (a.furniture_count ?? 0))
+  if (!completed.length) {
+    throw new Error('No furnished completed floor-plan-only job found; run the desktop E2E first')
+  }
+  return completed[0]
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`${url} -> ${response.status}`)
+  return response.json()
 }
 
 async function readState(page) {
@@ -83,7 +103,12 @@ async function touchDrag(cdp, from, to, holdMs = 0, steps = 8, durationMs = 24) 
 }
 
 async function main() {
-  const jobId = await resolveJobId()
+  const job = await resolveJob()
+  const jobId = job.job_id
+  assert.equal(job.status, 'completed')
+  assert.equal(job.photo_count, 0, 'Floor-plan-only jobs must not require photographs')
+  assert.ok(job.furniture_count > 0, 'The selected job must contain real furniture')
+  assert.equal(job.navigation_available, true, 'The selected job must be navigable')
   fs.mkdirSync(screenshotDir, { recursive: true })
 
   const browser = await chromium.launch({
@@ -112,6 +137,30 @@ async function main() {
 
     const coarse = await page.evaluate(() => window.matchMedia('(pointer: coarse)').matches)
     assert.ok(coarse, 'Touch-emulated context should report a coarse pointer')
+    assert.equal(
+      await page.locator('[data-testid="photo-review"]').count(),
+      0,
+      'A floor-plan-only tour must not show the removed photo review',
+    )
+
+    const start = await readState(page)
+    assert.equal(start.jobId, jobId, 'The viewer must load the selected job')
+    const scene = await fetchJson(`${engineUrl}/reconstructions/${jobId}/scene`)
+    assert.equal(scene.metadata.job_id, jobId)
+    const startNode = scene.room_graph.nodes.find((node) => node.id === start.roomId)
+    assert.ok(startNode, 'The player should spawn inside a detected room')
+    assert.ok(startNode.furniture.length > 0, 'The spawn room should contain real furniture')
+
+    const body = await page.locator('body').innerText()
+    assert.ok(
+      body.includes(`${job.furniture_count} furniture item`),
+      `The viewer header should report ${job.furniture_count} furniture items`,
+    )
+    const overlay = await page.getByTestId('room-info-overlay').innerText()
+    assert.ok(
+      overlay.includes(`${startNode.furniture_count} furniture item`),
+      `The room overlay should report ${startNode.furniture_count} furniture items`,
+    )
 
     const joystick = page.getByRole('group', { name: 'Movement joystick' })
     await joystick.waitFor({ state: 'visible', timeout: 15000 })
@@ -119,7 +168,6 @@ async function main() {
     const box = await joystick.boundingBox()
     assert.ok(box, 'Joystick should have a bounding box')
 
-    const start = await readState(page)
     const cdp = await context.newCDPSession(page)
     const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
     await touchDrag(cdp, center, { x: center.x, y: center.y - box.height * 0.42 }, 1200, 10, 30)
@@ -138,6 +186,17 @@ async function main() {
     const yawDelta = Math.abs(afterLook.yaw - afterJoystick.yaw)
     assert.ok(yawDelta > 0.1, `Touch drag should rotate the view; yaw changed ${yawDelta.toFixed(3)}`)
 
+    const hideFurniture = page.getByRole('button', { name: 'Hide furniture' })
+    await hideFurniture.scrollIntoViewIfNeeded()
+    assert.equal(await hideFurniture.getAttribute('aria-pressed'), 'true')
+    await hideFurniture.tap()
+    const showFurniture = page.getByRole('button', { name: 'Show furniture' })
+    await showFurniture.waitFor({ state: 'visible', timeout: 10000 })
+    assert.equal(await showFurniture.getAttribute('aria-pressed'), 'false')
+    await page.waitForTimeout(300)
+    await showFurniture.tap()
+    await page.getByRole('button', { name: 'Hide furniture' }).waitFor({ state: 'visible' })
+
     await page.screenshot({ path: path.join(screenshotDir, 'tour-mobile.png') })
 
     const fatalErrors = consoleErrors.filter(
@@ -152,6 +211,9 @@ async function main() {
           status: 'passed',
           jobId,
           viewport: '390x844 touch',
+          furnitureCount: job.furniture_count,
+          roomFurniture: startNode.furniture_count,
+          furnitureToggled: true,
           joystickDistance: Number(moved.toFixed(2)),
           yawDelta: Number(yawDelta.toFixed(3)),
           eyeHeight: Number(afterLook.y.toFixed(2)),

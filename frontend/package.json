@@ -9,7 +9,8 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:e2e": "node scripts/e2e-walkthrough.mjs && node scripts/e2e-mobile.mjs && node scripts/e2e-failure-correction.mjs",
-    "test:e2e:correction": "node scripts/e2e-failure-correction.mjs"
+    "test:e2e:correction": "node scripts/e2e-failure-correction.mjs",
+    "test:smoke": "node scripts/smoke-production.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.9",

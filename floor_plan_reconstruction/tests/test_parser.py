@@ -117,3 +117,38 @@ def test_parse_blank_plan_fails(tmp_path, cleanup_job_dirs):
 
     assert result["status"] == "failed"
     assert result["error"]
+
+
+def test_unusable_wall_cavities_are_dropped_and_rooms_renumbered():
+    warnings = []
+    rooms = [
+        {"id": 0, "bounds_px": [0, 0, 350, 300], "area_px": 105_000},
+        {"id": 1, "bounds_px": [400, 0, 14, 14], "area_px": 196},
+        {"id": 2, "bounds_px": [450, 0, 20, 400], "area_px": 8_000},
+        {"id": 3, "bounds_px": [500, 0, 250, 260], "area_px": 65_000},
+    ]
+
+    kept = ImprovedFloorPlanParser._drop_unusable_rooms(rooms, 50.0, warnings)
+
+    assert [room["bounds_px"] for room in kept] == [
+        [0, 0, 350, 300],
+        [500, 0, 250, 260],
+    ]
+    assert [room["id"] for room in kept] == [0, 1]
+    assert len(warnings) == 1
+    assert "Ignored 2 wall cavity/sliver region(s)" in warnings[0]
+    assert "0.08 m²" in warnings[0]
+    assert "0.28 m wide" in warnings[0]
+
+
+def test_usable_rooms_survive_the_sliver_filter():
+    warnings = []
+    rooms = [
+        {"id": 0, "bounds_px": [0, 0, 350, 300], "area_px": 105_000},
+        {"id": 1, "bounds_px": [400, 0, 250, 260], "area_px": 65_000},
+    ]
+
+    kept = ImprovedFloorPlanParser._drop_unusable_rooms(rooms, 50.0, warnings)
+
+    assert [room["id"] for room in kept] == [0, 1]
+    assert warnings == []

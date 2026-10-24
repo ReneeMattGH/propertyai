@@ -15,8 +15,8 @@ export default function Home() {
               <span className="text-blue-500"> Interactive 3D Walkthroughs</span>
             </h1>
             <p className="text-xl text-gray-400 mb-8 max-w-3xl mx-auto">
-              Upload a 2D floor plan and interior photos. The engine reconstructs a validated,
-              walkable 3D scene with real scale, collision, and room navigation you can explore
+              Upload a 2D floor plan. The engine reconstructs a validated, walkable 3D house,
+              infers room types, and furnishes every room with real 3D models you can explore
               in your browser.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
@@ -49,19 +49,19 @@ export default function Home() {
                 </div>
                 <h3 className="text-xl font-semibold text-white mb-2">Upload a Floor Plan</h3>
                 <p className="text-gray-400">
-                  Provide a PNG, JPEG, or PDF plan plus interior photos. Supplying the
-                  property width and length makes the reconstructed scale measured rather than estimated.
+                  A PNG, JPEG, or PDF plan is all you need. Supplying the property width and
+                  length makes the reconstructed scale measured rather than estimated.
                 </p>
               </div>
               <div className="bg-gray-900 p-6 rounded-lg">
                 <div className="w-12 h-12 bg-blue-600 rounded-lg flex items-center justify-center mb-4">
                   <span className="text-white text-xl font-bold">2</span>
                 </div>
-                <h3 className="text-xl font-semibold text-white mb-2">Validated Reconstruction</h3>
+                <h3 className="text-xl font-semibold text-white mb-2">Furnished 3D Reconstruction</h3>
                 <p className="text-gray-400">
-                  Walls, rooms, and doorways are vectorised, extruded, and exported as GLB.
-                  A job only completes if the scene reloads and passes geometry, collision, and
-                  reachability checks.
+                  Walls, rooms, doors, and windows are vectorised and extruded, room types are
+                  inferred, and each room is furnished with deterministic 3D models before the
+                  scene is exported and validated.
                 </p>
               </div>
               <div className="bg-gray-900 p-6 rounded-lg">
@@ -135,8 +135,8 @@ export default function Home() {
                 <div>
                   <h3 className="text-lg font-semibold text-white mb-1">Validation Report</h3>
                   <p className="text-gray-400">
-                    Every tour exposes its manifest, scale source, GLB integrity, collision, and
-                    doorway checks so you can see exactly what was verified.
+                    Every tour exposes its manifest, scale source, GLB integrity, furniture
+                    bounds, collision, and doorway checks so you can see exactly what was verified.
                   </p>
                 </div>
               </div>
@@ -151,8 +151,8 @@ export default function Home() {
               Ready to Reconstruct a Property?
             </h2>
             <p className="text-xl text-gray-400 mb-8">
-              Bring a floor plan and photos. The pipeline handles validation, reconstruction,
-              verification, and the interactive walkthrough.
+              Bring a floor plan. The pipeline handles validation, reconstruction, automatic
+              furnishing, navigation checks, and the interactive walkthrough.
             </p>
             <Link
               href="/create-tour"

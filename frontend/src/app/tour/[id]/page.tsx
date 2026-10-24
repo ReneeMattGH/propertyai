@@ -5,15 +5,23 @@ import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import GameEngine from '@/components/GameEngine'
 import Navigation from '@/components/Navigation'
+import RoomTypeReview from '@/components/RoomTypeReview'
 import {
   RECONSTRUCTION_URL,
   cancelJob,
   fetchJob,
   retryJob,
+  updateFurnishings,
   type ReconstructionJob,
 } from '@/lib/reconstruction'
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled'])
+
+const STYLES = [
+  { value: 'modern', label: 'Modern' },
+  { value: 'minimalist', label: 'Minimalist' },
+  { value: 'scandinavian', label: 'Scandinavian' },
+]
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -42,9 +50,12 @@ function TourViewerContent() {
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [showDetails, setShowDetails] = useState(false)
+  const [showFurnishing, setShowFurnishing] = useState(false)
+  const [showRoomTypes, setShowRoomTypes] = useState(false)
+  const [selectedStyle, setSelectedStyle] = useState('modern')
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionBusy, setActionBusy] = useState(false)
-  const [showDetails, setShowDetails] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
 
   const refresh = useCallback(
@@ -57,6 +68,7 @@ function TourViewerContent() {
       try {
         const data = await fetchJob(jobId, signal)
         setJob(data)
+        if (data.furnishing_style) setSelectedStyle(data.furnishing_style)
         setNotFound(false)
         setError(null)
         return data
@@ -124,6 +136,30 @@ function TourViewerContent() {
     } finally {
       setActionBusy(false)
     }
+  }
+
+  const applyFurnishing = async (options: { style?: string; regenerate?: boolean }) => {
+    if (!jobId) return
+    setActionBusy(true)
+    setActionError(null)
+    try {
+      const next = await updateFurnishings(jobId, {
+        ...(options.style ? { style: options.style } : {}),
+        ...(options.regenerate ? { regenerate: true } : {}),
+      })
+      setJob(next)
+      setReloadKey((value) => value + 1)
+    } catch (caught) {
+      setActionError(messageOf(caught))
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  const handleRoomTypesConfirmed = (next: ReconstructionJob) => {
+    setJob(next)
+    setActionError(null)
+    setReloadKey((value) => value + 1)
   }
 
   if (loading) {
@@ -198,6 +234,7 @@ function TourViewerContent() {
 
   if (job.status !== 'completed') {
     const failed = job.status === 'failed' || job.status === 'cancelled'
+    const awaitingRoomTypes = job.status === 'awaiting_room_types'
     return (
       <div className="min-h-screen bg-gray-900">
         <Navigation />
@@ -273,6 +310,17 @@ function TourViewerContent() {
               </p>
             )}
           </div>
+          {awaitingRoomTypes && (
+            <div className="mt-6">
+              <RoomTypeReview
+                key={job.job_id}
+                jobId={job.job_id}
+                onConfirmed={handleRoomTypesConfirmed}
+                style={job.furnishing_style ?? undefined}
+                variant={job.furnishing_variant ?? 0}
+              />
+            </div>
+          )}
         </div>
       </div>
     )
@@ -284,19 +332,7 @@ function TourViewerContent() {
   const validation = diagnostics?.scene_validation as Record<string, unknown> | undefined
   const checks = (validation?.checks ?? {}) as Record<string, boolean>
   const stats = (validation?.stats ?? {}) as Record<string, unknown>
-  const photogrammetry = diagnostics?.photogrammetry as Record<string, unknown> | undefined
-  const textureSummary = (
-    diagnostics?.geometry as Record<string, unknown> | undefined
-  )?.textures as Record<string, unknown> | undefined
-  const sfmStatus = typeof photogrammetry?.status === 'string' ? photogrammetry.status : null
-  const sfmRegistered =
-    typeof photogrammetry?.registered_images === 'number'
-      ? photogrammetry.registered_images
-      : null
-  const sfmInputs =
-    typeof photogrammetry?.input_images === 'number' ? photogrammetry.input_images : null
-  const textureCount =
-    typeof textureSummary?.count === 'number' ? textureSummary.count : null
+  const roomTypes = job.room_types ?? []
 
   return (
     <div className="flex min-h-screen flex-col bg-gray-900">
@@ -308,7 +344,11 @@ function TourViewerContent() {
             {job.project_name || 'Property walkthrough'}
           </h1>
           <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-400">
-            <span>{job.photo_count ?? 0} photos</span>
+            <span>{job.room_count ?? 0} rooms</span>
+            <span aria-hidden>·</span>
+            <span>{job.furniture_count ?? 0} furniture items</span>
+            <span aria-hidden>·</span>
+            <span className="capitalize">{job.furnishing_style ?? 'modern'} style</span>
             <span aria-hidden>·</span>
             <span>{job.scale_verified ? 'Measured dimensions' : 'Estimated scale'}</span>
             <span aria-hidden>·</span>
@@ -322,6 +362,13 @@ function TourViewerContent() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setShowFurnishing((value) => !value)}
+            className="rounded-lg border border-emerald-600/60 bg-emerald-950/30 px-3 py-2 text-xs font-medium text-emerald-200 hover:bg-emerald-900/40"
+            aria-expanded={showFurnishing}
+          >
+            {showFurnishing ? 'Hide furnishing' : 'Furnishing'}
+          </button>
           <button
             onClick={() => setShowDetails((value) => !value)}
             className="rounded-lg border border-gray-700 px-3 py-2 text-xs font-medium text-gray-200 hover:bg-gray-800"
@@ -346,6 +393,112 @@ function TourViewerContent() {
         </div>
       </div>
 
+      {showFurnishing && (
+        <div className="border-b border-gray-800 bg-gray-800/70 px-4 py-4 text-sm text-gray-300 sm:px-6">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div
+              className="rounded-lg border border-gray-700 bg-gray-900/60 p-4"
+              data-testid="furnishing-controls"
+            >
+              <h2 className="text-sm font-semibold text-white">Furnishing controls</h2>
+              <p className="mt-1 text-xs text-gray-400">
+                A style change swaps furniture models and materials without moving walls, doors or
+                room boundaries. Regenerate layout picks another deterministic arrangement for the
+                same rooms and confirmed types.
+              </p>
+              <div className="mt-3 flex flex-wrap items-end gap-2">
+                <label className="text-xs text-gray-400">
+                  <span className="mb-1 block">Style</span>
+                  <select
+                    value={selectedStyle}
+                    onChange={(event) => setSelectedStyle(event.target.value)}
+                    data-testid="furnishing-style"
+                    className="rounded border border-gray-600 bg-gray-800 px-3 py-2 text-sm text-white"
+                  >
+                    {STYLES.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => applyFurnishing({ style: selectedStyle })}
+                  disabled={actionBusy || selectedStyle === (job.furnishing_style ?? 'modern')}
+                  className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:bg-gray-600"
+                >
+                  {actionBusy ? 'Rebuilding...' : 'Apply style'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyFurnishing({ regenerate: true })}
+                  disabled={actionBusy}
+                  className="rounded-lg border border-gray-600 px-3 py-2 text-xs font-medium text-gray-100 hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Regenerate layout
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowRoomTypes((value) => !value)}
+                  className="rounded-lg border border-gray-600 px-3 py-2 text-xs font-medium text-gray-100 hover:bg-gray-700"
+                  aria-expanded={showRoomTypes}
+                >
+                  {showRoomTypes ? 'Hide room types' : 'Edit room types'}
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-gray-500">
+                Current: <span className="capitalize">{job.furnishing_style ?? 'modern'}</span> style ·
+                variant {job.furnishing_variant ?? 0} · {job.furniture_count ?? 0} furniture items.
+                Rebuilding temporarily returns this job to the progress view.
+              </p>
+              {actionError && (
+                <p className="mt-2 rounded border border-rose-500/40 bg-rose-950/40 p-2 text-xs text-rose-200">
+                  {actionError}
+                </p>
+              )}
+            </div>
+            <div
+              className="rounded-lg border border-gray-700 bg-gray-900/60 p-4"
+              data-testid="room-summary"
+            >
+              <h2 className="text-sm font-semibold text-white">Room summary</h2>
+              {roomTypes.length === 0 ? (
+                <p className="mt-1 text-xs text-gray-400">
+                  Room types are not stored on this job. Open room types below to review them.
+                </p>
+              ) : (
+                <ul className="mt-2 grid grid-cols-1 gap-1 text-xs text-gray-300 sm:grid-cols-2">
+                  {roomTypes.map((roomType) => (
+                    <li key={roomType.room_id} className="flex justify-between gap-2">
+                      <span className="truncate">{roomType.name || `Room ${roomType.room_id + 1}`}</span>
+                      <span className="text-gray-500">
+                        {(roomType.room_type ?? 'unknown').replace(/_/g, ' ')}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="mt-2 text-xs text-gray-500">
+                Walls, doors and room sizes always come from the uploaded floor plan. Furniture
+                never rewrites the architecture.
+              </p>
+            </div>
+          </div>
+          {showRoomTypes && (
+            <div className="mt-4">
+              <RoomTypeReview
+                key={job.job_id}
+                jobId={job.job_id}
+                onConfirmed={handleRoomTypesConfirmed}
+                style={selectedStyle}
+                variant={job.furnishing_variant ?? 0}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {showDetails && (
         <div className="border-b border-gray-800 bg-gray-800/70 px-4 py-4 text-sm text-gray-300 sm:px-6">
           <div className="grid gap-4 md:grid-cols-3">
@@ -363,20 +516,18 @@ function TourViewerContent() {
                 <dd>{job.num_floors ?? 1} (ground floor modelled)</dd>
               </div>
               <div className="flex justify-between gap-3">
-                <dt className="text-gray-500">Photogrammetry</dt>
-                <dd className="truncate">
-                  {sfmStatus
-                    ? `${sfmStatus.replace(/_/g, ' ')}${
-                        sfmRegistered !== null && sfmInputs !== null
-                          ? ` · ${sfmRegistered}/${sfmInputs} photos`
-                          : ''
-                      }`
-                    : 'not run'}
+                <dt className="text-gray-500">Room types</dt>
+                <dd>{job.room_types_confirmed ? `${roomTypes.length} confirmed` : 'not confirmed'}</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-gray-500">Furnishing</dt>
+                <dd className="capitalize">
+                  {job.furnishing_style ?? 'modern'} · variant {job.furnishing_variant ?? 0}
                 </dd>
               </div>
               <div className="flex justify-between gap-3">
-                <dt className="text-gray-500">Photo textures</dt>
-                <dd>{textureCount !== null ? `${textureCount} sets` : 'none'}</dd>
+                <dt className="text-gray-500">Furniture items</dt>
+                <dd>{job.furniture_count ?? 0}</dd>
               </div>
               <div className="flex justify-between gap-3">
                 <dt className="text-gray-500">Rooms / doorways</dt>
@@ -411,11 +562,11 @@ function TourViewerContent() {
                   Method and limitations
                 </p>
                 <p className="mt-1 text-xs text-gray-400">
-                  Layout comes from 2D wall vectorisation and room segmentation. Wall and floor
-                  materials are real crops from the uploaded photographs, embedded in the GLB.
-                  COLMAP estimates camera poses from the same photographs when they overlap; dense
-                  image-derived geometry requires a CUDA COLMAP build. Surfaces not visible in any
-                  photograph are inferred and listed below.
+                  Layout comes from 2D wall vectorisation and room segmentation of the uploaded
+                  floor plan. Room types are inferred from geometry and confirmed by you. Furniture
+                  uses real 3D meshes placed deterministically inside each room with wall anchoring,
+                  doorway and window clearances, and walkable-route checks. The floor plan is the
+                  only input; no photographs or external image-generation service are used.
                 </p>
                 <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-gray-400">
                   {limitations.map((limitation, index) => (
@@ -436,7 +587,10 @@ function TourViewerContent() {
       )}
 
       <div className="relative min-h-[70vh] flex-1">
-        <GameEngine jobId={jobId} />
+        <GameEngine
+          key={`${jobId}-${job.furnishing_style ?? 'modern'}-${job.furnishing_variant ?? 0}`}
+          jobId={jobId}
+        />
       </div>
     </div>
   )

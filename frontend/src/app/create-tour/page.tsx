@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import Navigation from '@/components/Navigation'
-import PhotoReview from '@/components/PhotoReview'
+import RoomTypeReview from '@/components/RoomTypeReview'
 import {
   RECONSTRUCTION_URL,
   fetchEngineHealth,
@@ -18,44 +18,92 @@ import {
 } from '@/lib/reconstruction'
 
 const MAX_FLOOR_PLAN_BYTES = 15 * 1024 * 1024
-const MAX_PHOTO_BYTES = 15 * 1024 * 1024
-const MAX_PHOTOS = 40
 const TERMINAL = new Set(['completed', 'failed', 'cancelled'])
 
-const STAGES = [
-  { key: 'preprocessing', label: 'Preprocess plan', detail: 'Normalise, denoise, threshold wall candidates' },
-  { key: 'detecting_rooms', label: 'Detect rooms', detail: 'Wall bands, doorway gaps, enclosed regions' },
-  { key: 'validating_layout', label: 'Validate layout', detail: 'Room connectivity, scale and footprint' },
-  {
-    key: 'classifying_photos',
-    label: 'Classify photographs',
-    detail: 'Local CLIP vision model proposes a room category per photo',
-  },
-  {
-    key: 'matching_photos',
-    label: 'Match photos to rooms',
-    detail: 'Plan rooms, classifier confidence and ambiguity',
-  },
-  {
-    key: 'awaiting_review',
-    label: 'Review photo assignments',
-    detail: 'You confirm every photo-to-room assignment before reconstruction',
-  },
-  {
-    key: 'analyzing_photos',
-    label: 'Analyse photographs',
-    detail: 'Wall/floor texture crops, duplicates and overlap',
-  },
-  {
-    key: 'reconstructing_images',
-    label: 'Reconstruct from images',
-    detail: 'COLMAP camera poses and sparse points',
-  },
-  { key: 'building_geometry', label: 'Build geometry', detail: 'Floors, walls, doors, windows, collision' },
-  { key: 'texturing', label: 'Apply photo textures', detail: 'UV-map real crops onto walls and floors' },
-  { key: 'exporting', label: 'Export assets', detail: 'Write GLB, collision, room graph' },
-  { key: 'validating_assets', label: 'Validate assets', detail: 'Re-open GLB, check textures, spawn and room graph' },
+const STYLES = [
+  { value: 'modern', label: 'Modern' },
+  { value: 'minimalist', label: 'Minimalist' },
+  { value: 'scandinavian', label: 'Scandinavian' },
 ]
+
+const STAGES = [
+  {
+    key: 'uploading',
+    label: 'Upload floor plan',
+    detail: 'Original plan preserved unchanged for this job',
+  },
+  {
+    key: 'parsing_floor_plan',
+    label: 'Parse floor plan',
+    detail: 'Validate the image, normalise, threshold wall candidates',
+  },
+  {
+    key: 'detecting_rooms_openings',
+    label: 'Detect rooms and openings',
+    detail: 'Wall bands, enclosed regions, doorways and windows',
+  },
+  {
+    key: 'validating_room_layout',
+    label: 'Validate room layout',
+    detail: 'Room connectivity, scale and footprint',
+  },
+  {
+    key: 'generating_geometry',
+    label: 'Generate 3D geometry',
+    detail: 'Floors, walls, ceilings, openings and room graph',
+  },
+  {
+    key: 'placing_furniture',
+    label: 'Place furniture',
+    detail: 'Wall anchoring, clearances and 3D asset bounds per room type',
+  },
+  {
+    key: 'generating_lighting_materials',
+    label: 'Generate lighting and materials',
+    detail: 'Room lighting, PBR materials and shadow setup',
+  },
+  {
+    key: 'validating_navigation_collisions',
+    label: 'Validate navigation and collisions',
+    detail: 'Spawn, doorway access, furniture bounds and room reachability',
+  },
+  {
+    key: 'loading_walkthrough',
+    label: 'Load walkthrough',
+    detail: 'Export GLB, collision, room graph and furniture manifest',
+  },
+  {
+    key: 'completed',
+    label: 'Completed',
+    detail: 'Validated scene, furniture and walkthrough ready',
+  },
+]
+
+const STAGE_INDEX: Record<string, number> = {
+  queued: 0,
+  uploading: 0,
+  parsing_floor_plan: 1,
+  preprocessing: 1,
+  detecting_rooms_openings: 2,
+  detecting_rooms: 2,
+  validating_room_layout: 3,
+  validating_layout: 3,
+  awaiting_room_types: 4,
+  generating_geometry: 4,
+  building_geometry: 4,
+  texturing: 4,
+  exporting: 8,
+  placing_furniture: 5,
+  generating_lighting_materials: 6,
+  validating_navigation_collisions: 7,
+  loading_walkthrough: 8,
+  validating_assets: 8,
+  completed: 9,
+}
+
+function stageIndex(key?: string | null): number {
+  return key ? STAGE_INDEX[key] ?? -1 : -1
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
@@ -78,19 +126,23 @@ async function errorMessage(response: Response): Promise<string> {
 export default function CreateTourPage() {
   const [projectName, setProjectName] = useState('')
   const [floorPlan, setFloorPlan] = useState<File | null>(null)
-  const [photos, setPhotos] = useState<File[]>([])
   const [numFloors, setNumFloors] = useState(1)
   const [knownWidth, setKnownWidth] = useState('')
   const [knownLength, setKnownLength] = useState('')
+  const [style, setStyle] = useState('modern')
 
   const [submitting, setSubmitting] = useState(false)
   const [activeJobId, setActiveJobId] = useState<string | null>(null)
   const [job, setJob] = useState<ReconstructionJob | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pollKey, setPollKey] = useState(0)
-  const [engine, setEngine] = useState<{ online: boolean; pdf: boolean; detail?: string } | null>(
-    null,
-  )
+  const [engine, setEngine] = useState<{
+    online: boolean
+    pdf: boolean
+    styles?: string[]
+    assets?: number
+    detail?: string
+  } | null>(null)
   const [diagnostics, setDiagnostics] = useState<JobDiagnostics | null>(null)
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null)
   const [retrying, setRetrying] = useState(false)
@@ -106,15 +158,17 @@ export default function CreateTourPage() {
   const [planSize, setPlanSize] = useState<{ width: number; height: number } | null>(null)
   const [manualSubmitting, setManualSubmitting] = useState(false)
   const planCanvasRef = useRef<SVGSVGElement>(null)
-  const photoInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const controller = new AbortController()
     fetchEngineHealth(controller.signal)
       .then((health) => {
+        const furnishing = health.dependencies?.furnishing
         setEngine({
           online: health.status === 'healthy',
           pdf: Boolean(health.dependencies?.pdf_floor_plans),
+          styles: furnishing?.styles,
+          assets: furnishing?.asset_library_size,
         })
       })
       .catch((caught) => {
@@ -219,45 +273,6 @@ export default function CreateTourPage() {
     setFloorPlan(file)
   }
 
-  const handlePhotoUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setError(null)
-    const incoming = Array.from(event.target.files ?? [])
-    if (incoming.length === 0) return
-    const rejected: string[] = []
-    const accepted = incoming.filter((file) => {
-      if (!['image/png', 'image/jpeg', 'image/jpg'].includes(file.type)) {
-        rejected.push(`${file.name} (unsupported type)`)
-        return false
-      }
-      if (file.size > MAX_PHOTO_BYTES) {
-        rejected.push(`${file.name} (over 15 MB)`)
-        return false
-      }
-      return true
-    })
-    setPhotos((previous) => {
-      const merged = [...previous]
-      for (const file of accepted) {
-        const duplicate = merged.some(
-          (item) =>
-            item.name === file.name &&
-            item.size === file.size &&
-            item.lastModified === file.lastModified,
-        )
-        if (!duplicate) merged.push(file)
-      }
-      return merged.slice(0, MAX_PHOTOS)
-    })
-    if (rejected.length > 0) {
-      setError(`Some photographs were skipped: ${rejected.join(', ')}`)
-    }
-    if (event.target) event.target.value = ''
-  }
-
-  const removePhoto = (index: number) => {
-    setPhotos((previous) => previous.filter((_, itemIndex) => itemIndex !== index))
-  }
-
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     setError(null)
@@ -267,10 +282,6 @@ export default function CreateTourPage() {
     }
     if (!floorPlan) {
       setError('Upload a floor plan image.')
-      return
-    }
-    if (photos.length === 0) {
-      setError('Upload at least one property photograph.')
       return
     }
 
@@ -287,9 +298,9 @@ export default function CreateTourPage() {
       formData.append('project_name', projectName.trim())
       formData.append('floor_plan', floorPlan)
       formData.append('num_floors', String(numFloors))
+      formData.append('style', style)
       if (knownWidth) formData.append('known_width', knownWidth)
       if (knownLength) formData.append('known_length', knownLength)
-      for (const photo of photos) formData.append('photos', photo)
 
       const response = await fetch(`${RECONSTRUCTION_URL}/reconstructions`, {
         method: 'POST',
@@ -415,7 +426,7 @@ export default function CreateTourPage() {
     }
   }
 
-  const handleReviewConfirmed = useCallback((next: ReconstructionJob) => {
+  const handleJobUpdated = useCallback((next: ReconstructionJob) => {
     setJob(next)
     setError(null)
     setPollKey((value) => value + 1)
@@ -423,15 +434,12 @@ export default function CreateTourPage() {
 
   const stageKey =
     job?.status === 'failed' ? job.failed_stage ?? null : job?.current_stage ?? null
-  const currentStageIndex = job
-    ? STAGES.findIndex((stage) => stageKey === stage.key)
-    : -1
+  const currentStageIndex = job ? stageIndex(stageKey) : -1
   const failedStageIndex =
-    job?.status === 'failed' && job.failed_stage
-      ? STAGES.findIndex((stage) => job.failed_stage === stage.key)
-      : -1
+    job?.status === 'failed' && job.failed_stage ? stageIndex(job.failed_stage) : -1
   const completed = job?.status === 'completed'
   const failed = job?.status === 'failed' || job?.status === 'cancelled'
+  const awaitingRoomTypes = job?.status === 'awaiting_room_types'
   const busy = submitting || (Boolean(activeJobId) && !completed && !failed)
   const failedStageLabel =
     failedStageIndex >= 0 ? STAGES[failedStageIndex].label : job?.failed_stage || null
@@ -450,9 +458,9 @@ export default function CreateTourPage() {
           <div>
             <h1 className="text-3xl font-bold text-white">Create Property Tour</h1>
             <p className="mt-1 max-w-2xl text-gray-400">
-              Upload a 2D floor plan and interior photographs. The engine builds a validated,
-              walkable scene constrained by the plan, textures walls and floors from your photos,
-              and runs COLMAP structure-from-motion on the uploaded views.
+              Upload a 2D floor plan. The engine parses walls, rooms and openings, asks you to
+              confirm the inferred room types, then builds a validated walkable scene and furnishes
+              every room from a built-in 3D asset library. No photographs are required.
             </p>
           </div>
           <div className="text-xs">
@@ -461,6 +469,7 @@ export default function CreateTourPage() {
             ) : engine.online ? (
               <span className="rounded-full border border-emerald-500/40 bg-emerald-950/30 px-3 py-1 text-emerald-300">
                 Engine online · PDF plans {engine.pdf ? 'supported' : 'unavailable (use PNG/JPG)'}
+                {engine.assets ? ` · ${engine.assets} 3D assets` : ''}
               </span>
             ) : (
               <span className="rounded-full border border-rose-500/40 bg-rose-950/30 px-3 py-1 text-rose-300">
@@ -567,51 +576,27 @@ export default function CreateTourPage() {
               </p>
 
               <div>
-                <label htmlFor="photos" className="mb-2 block text-sm font-medium text-gray-300">
-                  Property photographs * (PNG, JPG, JPEG; up to {MAX_PHOTOS})
+                <label htmlFor="furnishing-style" className="mb-2 block text-sm font-medium text-gray-300">
+                  Furniture style
                 </label>
-                <input
-                  id="photos"
-                  ref={photoInputRef}
-                  type="file"
-                  accept=".png,.jpg,.jpeg"
-                  multiple
-                  onChange={handlePhotoUpload}
+                <select
+                  id="furnishing-style"
+                  value={style}
+                  onChange={(event) => setStyle(event.target.value)}
                   className="w-full rounded-lg border border-gray-600 bg-gray-700 px-4 py-2 text-white focus:border-transparent focus:ring-2 focus:ring-blue-500"
-                  required={photos.length === 0}
-                />
+                >
+                  {STYLES.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
                 <p className="mt-2 text-sm text-gray-400">
-                  Photographs are cropped into wall and floor materials and processed with COLMAP
-                  structure-from-motion. Overlapping views of each area improve camera estimation;
-                  the floor plan supplies the layout and scale.
+                  Furniture is placed deterministically with real 3D meshes and PBR materials.
+                  Photographs are not required and no external image-generation API is called.
+                  Room types are proposed from the plan and confirmed by you before furnishing.
                 </p>
               </div>
-
-              {photos.length > 0 && (
-                <div>
-                  <p className="mb-2 text-sm font-medium text-gray-300">
-                    Selected photographs ({photos.length})
-                  </p>
-                  <div className="max-h-48 space-y-2 overflow-y-auto">
-                    {photos.map((photo, index) => (
-                      <div
-                        key={`${photo.name}-${photo.lastModified}-${index}`}
-                        className="flex items-center justify-between rounded bg-gray-700 px-3 py-2"
-                      >
-                        <span className="flex-1 truncate text-sm text-white">{photo.name}</span>
-                        <span className="mr-3 text-xs text-gray-400">{formatBytes(photo.size)}</span>
-                        <button
-                          type="button"
-                          onClick={() => removePhoto(index)}
-                          className="text-sm text-red-400 hover:text-red-300"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
 
               {error && (
                 <div className="rounded-lg border border-rose-500/40 bg-rose-950/40 p-3 text-sm text-rose-200">
@@ -624,7 +609,7 @@ export default function CreateTourPage() {
                 disabled={busy}
                 className="w-full rounded-lg bg-blue-600 py-3 font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-gray-600"
               >
-                {submitting ? 'Uploading...' : busy ? 'Reconstruction running...' : 'Start reconstruction'}
+                {submitting ? 'Uploading...' : busy ? 'Reconstruction running...' : 'Generate furnished tour'}
               </button>
             </form>
           </div>
@@ -666,18 +651,18 @@ export default function CreateTourPage() {
                       {job.error_code}
                     </p>
                   )}
-                  {job.status === 'awaiting_review' && (
+                  {awaitingRoomTypes && (
                     <div className="mt-3 rounded border border-blue-500/40 bg-blue-950/30 p-3 text-xs text-blue-100">
                       <p className="font-medium">Your review is required</p>
                       <p className="mt-1 text-blue-100/80">
-                        The classifier has proposed room categories. Confirm or correct every
-                        assignment in the review panel before the walkthrough is generated.
+                        The plan has been parsed and rooms have inferred types. Confirm or correct
+                        every room before furniture is placed and the walkthrough is generated.
                       </p>
                       <a
-                        href="#photo-review"
+                        href="#room-type-review"
                         className="mt-2 inline-block rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-500"
                       >
-                        Review photo assignments
+                        Review room types
                       </a>
                     </div>
                   )}
@@ -687,7 +672,7 @@ export default function CreateTourPage() {
                   {STAGES.map((stage, index) => {
                     const reached =
                       completed || (currentStageIndex >= 0 && index < currentStageIndex)
-                    const active = !failed && job.current_stage === stage.key
+                    const active = !failed && !awaitingRoomTypes && currentStageIndex === index
                     const stageFailed = failedStageIndex === index
                     return (
                       <li key={stage.key} className="flex items-start">
@@ -1089,6 +1074,25 @@ export default function CreateTourPage() {
                   </div>
                 )}
 
+                {completed && (
+                  <div className="rounded-lg border border-emerald-500/30 bg-emerald-950/20 p-3 text-xs text-emerald-100">
+                    <p className="font-medium">
+                      {job.room_count ?? 0} room{job.room_count === 1 ? '' : 's'} ·{' '}
+                      {job.furniture_count ?? 0} furniture item
+                      {job.furniture_count === 1 ? '' : 's'} ·{' '}
+                      <span className="capitalize">{job.furnishing_style ?? 'modern'}</span> style ·{' '}
+                      {job.navigation_available ? 'all rooms reachable' : 'partial navigation'}
+                    </p>
+                    {(job.room_types?.length ?? 0) > 0 && (
+                      <p className="mt-1 text-emerald-100/75">
+                        {job.room_types
+                          ?.map((roomType) => roomType.name || `Room ${roomType.room_id + 1}`)
+                          .join(' · ')}
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 <div className="flex flex-wrap gap-3">
                   {completed && (
                     <Link
@@ -1134,23 +1138,38 @@ export default function CreateTourPage() {
           </div>
         </div>
 
-        {job?.status === 'awaiting_review' && (
-          <div id="photo-review" className="mt-8 scroll-mt-6">
-            <PhotoReview jobId={job.job_id} onConfirmed={handleReviewConfirmed} />
+        {awaitingRoomTypes && job && (
+          <div id="room-type-review" className="mt-8 scroll-mt-6">
+            <RoomTypeReview
+              key={job.job_id}
+              jobId={job.job_id}
+              onConfirmed={handleJobUpdated}
+              style={style}
+              variant={job.furnishing_variant ?? 0}
+            />
           </div>
         )}
 
         <div className="mt-8 rounded-lg border border-blue-500/40 bg-blue-950/20 p-6">
           <h3 className="mb-2 font-semibold text-white">What the pipeline actually does</h3>
           <ul className="space-y-2 text-sm text-gray-300">
-            <li>1. Validates the uploaded plan and photographs, including readability and size.</li>
-            <li>2. Vectorises walls, segments rooms, detects doorway gaps and resolves scale.</li>
+            <li>1. Validates the uploaded floor plan for readability, size and resolution.</li>
             <li>
-              3. Crops real wall/floor textures from your photos and runs COLMAP
-              structure-from-motion (sparse; dense MVS needs a CUDA COLMAP build).
+              2. Vectorises walls, segments enclosed rooms, detects doorway and window openings,
+              and resolves the plan scale.
             </li>
-            <li>4. Builds textured floors, ceilings, walls with openings, collision boxes and a room graph.</li>
-            <li>5. Re-opens the GLB, checks embedded photo textures, and refuses to mark the job complete if validation fails.</li>
+            <li>
+              3. Infers room types from geometry and hands uncertain rooms to you for confirmation;
+              rooms you leave unspecified are not furnished at random.
+            </li>
+            <li>
+              4. Builds floors, ceilings, walls with openings, collision boxes and a room graph,
+              then places real 3D furniture with wall anchoring, door clearances and walkable routes.
+            </li>
+            <li>
+              5. Re-opens the GLB and refuses to mark the job complete unless geometry, furniture
+              bounds, collisions and room reachability all validate.
+            </li>
           </ul>
         </div>
       </main>
