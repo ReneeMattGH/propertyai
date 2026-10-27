@@ -46,13 +46,17 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 BASE_DIR = Path(__file__).parent
-INPUT_DIR = BASE_DIR / "input"
-FLOOR_PLANS_DIR = BASE_DIR / "floor_plans"
-PHOTOS_DIR = BASE_DIR / "photos"
-GEOMETRY_DIR = BASE_DIR / "geometry"
-OUTPUT_DIR = BASE_DIR / "output"
-LOGS_DIR = BASE_DIR / "logs"
-JOBS_FILE = BASE_DIR / "jobs.json"
+# On a hosted deployment the application directory is replaced on every
+# release. Point REALESTAI_DATA_DIR at a persistent volume so uploaded plans,
+# generated scenes and job state survive restarts.
+DATA_DIR = Path(os.environ.get("REALESTAI_DATA_DIR", str(BASE_DIR))).expanduser().resolve()
+INPUT_DIR = DATA_DIR / "input"
+FLOOR_PLANS_DIR = DATA_DIR / "floor_plans"
+PHOTOS_DIR = DATA_DIR / "photos"
+GEOMETRY_DIR = DATA_DIR / "geometry"
+OUTPUT_DIR = DATA_DIR / "output"
+LOGS_DIR = DATA_DIR / "logs"
+JOBS_FILE = DATA_DIR / "jobs.json"
 
 for directory in (INPUT_DIR, FLOOR_PLANS_DIR, PHOTOS_DIR, GEOMETRY_DIR, OUTPUT_DIR, LOGS_DIR):
     directory.mkdir(parents=True, exist_ok=True)
@@ -284,9 +288,11 @@ app = FastAPI(
 frontend_urls = os.getenv(
     "FRONTEND_URLS", "http://localhost:3000,http://127.0.0.1:3000"
 ).split(",")
+frontend_url_regex = os.getenv("FRONTEND_URL_REGEX", "").strip() or None
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[url.strip() for url in frontend_urls if url.strip()],
+    allow_origin_regex=frontend_url_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1488,14 +1494,17 @@ class ReconstructionPipeline:
                     {"error": repair_result.get("message")},
                 )
             if validation_result:
+                geometry_valid = bool(validation_result.get("geometry_valid"))
                 self._record_stage(
                     job_id,
                     stage_records,
                     "scene_validation",
-                    "completed" if validation_result["geometry_valid"] else "failed",
+                    "completed" if geometry_valid else "failed",
                     {
-                        "geometry_valid": validation_result["geometry_valid"],
-                        "navigation_available": validation_result["navigation_available"],
+                        "geometry_valid": geometry_valid,
+                        "navigation_available": bool(
+                            validation_result.get("navigation_available")
+                        ),
                         "checks": validation_result.get("checks", {}),
                         "issues": (validation_result.get("stats") or {}).get(
                             "issues", []

@@ -153,6 +153,72 @@ venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
 The frontend can browse property and tour pages with placeholder Supabase
 credentials; real authentication requires a Supabase project.
 
+## Deploy
+
+The frontend and engine deploy separately. Vercel hosts the Next.js
+application; the reconstruction engine needs a long-running container because
+jobs outlive a single request and write uploaded plans plus generated assets
+to disk. Vercel Functions are not suitable for that workload.
+
+### Engine on Render
+
+The repository includes `render.yaml` and a production
+`floor_plan_reconstruction/Dockerfile`. The container installs only the
+dependencies used by the floor-plan workflow (no CUDA, COLMAP, torch, or
+transformers), serves on Render's `$PORT`, and stores state under
+`REALESTAI_DATA_DIR`.
+
+1. In Render, create a **Blueprint** from this repository. Render reads
+   `render.yaml` and creates the `realestai-engine` web service.
+2. The blueprint uses the **free** instance, so its filesystem is ephemeral:
+   jobs and generated tours are lost when it restarts or spins down, and the
+   first request after idle waits for a cold start. For durable shared tours,
+   change the plan to a paid instance, attach a persistent disk at
+   `/var/data`, and set `REALESTAI_DATA_DIR=/var/data`.
+3. Set `FRONTEND_URLS` to the deployed Vercel URL, for example
+   `https://your-project.vercel.app`. Optionally set `FRONTEND_URL_REGEX` to
+   allow preview deployments. Then deploy or restart the service.
+4. Confirm `https://your-engine.onrender.com/health` reports
+   `"status": "healthy"` and the expected dependency versions.
+
+### Frontend on Vercel
+
+1. Import the repository into Vercel and set the **Root Directory** to
+   `frontend`. The framework preset is Next.js.
+2. Add the production environment variable
+   `NEXT_PUBLIC_RECONSTRUCTION_URL=https://your-engine.onrender.com`.
+3. Deploy. `NEXT_PUBLIC_API_URL` is only needed if you also deploy the
+   optional application backend.
+
+`NEXT_PUBLIC_RECONSTRUCTION_URL` is inlined at build time, so redeploy the
+frontend after changing it. The frontend calls the engine directly from the
+browser; the engine's CORS configuration must include the frontend origin.
+
+### Public deployment caveat
+
+The engine has no per-user authentication. It lists jobs for the dashboard and
+serves any generated tour by job ID, so a public deployment is single-tenant:
+anyone who knows the engine URL can enumerate and open tours created by other
+visitors. Do not upload confidential floor plans to a public instance. Adding
+multi-user ownership is a separate product task, not a configuration flag.
+
+### Container notes
+
+The engine container can also run locally:
+
+```bash
+docker build -t realestai-engine floor_plan_reconstruction
+docker run --rm -p 8002:8002 \
+  -e FRONTEND_URLS=http://localhost:3000 \
+  -v realestai-data:/var/data \
+  realestai-engine
+```
+
+The image does not include `tests/` or the local upload/output directories.
+The legacy photograph and COLMAP dependencies remain in
+`requirements.txt` for development and regression tests, but are not installed
+in the production image.
+
 ## Controls
 
 * Desktop: click to capture the pointer, mouse look, `W/A/S/D` or arrow keys,

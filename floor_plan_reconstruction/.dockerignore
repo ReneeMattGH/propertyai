@@ -1,0 +1,15 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+input/
+output/
+logs/
+geometry/
+photos/
+floor_plans/
+jobs.json
+.env
+.DS_Store

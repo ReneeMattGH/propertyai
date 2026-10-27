@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: realestai-engine
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./floor_plan_reconstruction/Dockerfile
+    dockerContext: ./floor_plan_reconstruction
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: FRONTEND_URLS
+        sync: false
+      - key: FRONTEND_URL_REGEX
+        sync: false
+      # Free instances have an ephemeral filesystem. Jobs and generated tours
+      # survive normal requests but are lost when the instance restarts or
+      # spins down. Attach a persistent disk and change this path on a paid
+      # plan if durable shared tours are required.
+      - key: REALESTAI_DATA_DIR
+        value: /tmp/realestai-data
+      - key: REPAIR_MAX_ATTEMPTS
+        value: "3"
+      - key: REPAIR_TIME_BUDGET_S
+        value: "120"

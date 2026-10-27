@@ -1,0 +1,21 @@
+# Runtime dependencies for the hosted floor-plan-only engine.
+# The legacy photo/COLMAP workflow (torch, transformers, pycolmap) is not
+# installed in production: new jobs never upload photographs.
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+python-multipart>=0.0.20
+pydantic>=2.10.0
+
+opencv-python-headless>=4.8.0
+pillow>=10.0.0
+numpy>=1.24.0
+scipy>=1.11.0
+
+trimesh>=4.0.0
+shapely>=2.0.0
+mapbox-earcut>=1.0.1
+networkx>=3.0
+
+# Optional PDF floor plans. The image also installs poppler-utils.
+pdf2image>=1.16.0
