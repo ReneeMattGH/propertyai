@@ -175,6 +175,58 @@ export interface DiagnosticArtifact {
   size_bytes: number
 }
 
+export interface RepairLogEntry {
+  code?: string
+  detail?: string
+  result?: string
+  stage?: string
+  source?: string
+  object_ids?: (string | number)[]
+  before?: unknown
+  after?: unknown
+}
+
+export interface RepairAttemptSummary {
+  attempt?: number
+  phase?: string
+  geometry_valid?: boolean
+  navigation_available?: boolean
+  errors?: string[]
+  repairs?: RepairLogEntry[]
+  elapsed_s?: number
+}
+
+export interface RepairDiagnostics {
+  status?: string | null
+  error_code?: string | null
+  attempt_count?: number
+  attempts?: number | RepairAttemptSummary[]
+  repair_count?: number
+  conservative_fallback?: boolean
+  normalization?: {
+    valid?: boolean
+    repairs?: RepairLogEntry[]
+    ambiguities?: Record<string, unknown>[]
+    warnings?: string[]
+  } | null
+  repairs?: RepairLogEntry[]
+  attempts_detail?: RepairAttemptSummary[]
+  unresolved?: string[]
+  artifacts?: string[]
+  log_url?: string | null
+}
+
+export interface HouseModelDiagnostics {
+  version?: string | null
+  spawn?: { position?: number[]; room_id?: number } | null
+  rooms?: number
+  doorways?: number
+  walls?: number
+  validation?: Record<string, unknown> | null
+  ambiguities?: Record<string, unknown>[]
+  warnings?: string[]
+}
+
 export interface JobDiagnostics {
   job_id: string
   status: string
@@ -197,6 +249,8 @@ export interface JobDiagnostics {
   room_types_confirmed?: boolean | null
   furnishing_style?: string | null
   furniture_count?: number | null
+  repair?: RepairDiagnostics | null
+  house_model?: HouseModelDiagnostics | null
 }
 
 export interface AssetEntry {

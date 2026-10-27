@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -13,8 +13,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "RealEstAI - Transform Property Footage Into 3D Tours",
-  description: "Upload ordinary property videos and generate immersive, navigable 3D experiences. Let buyers explore properties from anywhere.",
+  title: "RealEstAI — Floor plans to furnished 3D walkthroughs",
+  description:
+    "Upload a 2D floor plan and receive a validated, furnished, first-person 3D walkthrough. Room detection, automatic furnishing, and navigation checks happen on your own machine.",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#f5f1e8",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -23,7 +28,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="flex min-h-full flex-col bg-ivory text-ink">{children}</body>
     </html>
   );
 }

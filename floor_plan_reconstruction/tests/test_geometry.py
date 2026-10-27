@@ -192,9 +192,17 @@ def test_geometry_exports_a_loadable_glb(fixture_plan, fixture_photos, cleanup_j
     assert not any(name.startswith("Floors_photo_") for name in scene.geometry)
 
     glb_json = read_glb_json(glb_path)
-    # Wall crops from each confirmed photo; floors are deliberately neutral.
-    assert len(glb_json["images"]) == len(fixture_photos)
-    assert len(glb_json["textures"]) == len(fixture_photos)
+    # Confirmed photo wall crops plus procedural PBR architecture maps
+    # (oak/stone base colour and normal maps) are embedded in the GLB.
+    assert len(glb_json["images"]) >= len(fixture_photos)
+    assert len(glb_json["textures"]) >= len(fixture_photos)
+    assert len(glb_json["textures"]) == len(glb_json["images"])
+    assert sum(
+        1
+        for material in glb_json["materials"]
+        if "normalTexture" in material.get("pbrMetallicRoughness", {})
+        or "normalTexture" in material
+    ) >= 2
 
     metadata = json.loads((output_dir / "metadata.json").read_text())
     assert metadata["method"]["photogrammetry_used_for_geometry"] is False

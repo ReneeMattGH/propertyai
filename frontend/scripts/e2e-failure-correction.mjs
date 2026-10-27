@@ -105,6 +105,11 @@ function roomAt(rooms, x, z) {
   })
 }
 
+function norm(x, z) {
+  const length = Math.hypot(x, z) || 1
+  return { x: x / length, z: z / length }
+}
+
 function pointBlocked(x, z, boxes, radius = PLAYER_RADIUS + 0.015) {
   return boxes.some(
     (box) =>
@@ -264,13 +269,28 @@ async function walkTo(page, target, timeoutMs = 20000) {
       }
       const forward = { x: -Math.sin(state.yaw), z: -Math.cos(state.yaw) }
       const right = { x: Math.cos(state.yaw), z: -Math.sin(state.yaw) }
-      const alongForward = dx * forward.x + dz * forward.z
-      const alongRight = dx * right.x + dz * right.z
-      const next = new Set()
-      if (Math.abs(alongForward) > 0.2) next.add(alongForward > 0 ? 'KeyW' : 'KeyS')
-      if (Math.abs(alongRight) > 0.2) next.add(alongRight > 0 ? 'KeyD' : 'KeyA')
-      if (next.size === 0) break
-      await setKeys(next)
+      const desired = { x: dx / remaining, z: dz / remaining }
+      const options = [
+        { keys: ['KeyW'], vector: forward },
+        { keys: ['KeyS'], vector: { x: -forward.x, z: -forward.z } },
+        { keys: ['KeyA'], vector: { x: -right.x, z: -right.z } },
+        { keys: ['KeyD'], vector: right },
+        { keys: ['KeyW', 'KeyA'], vector: norm(forward.x - right.x, forward.z - right.z) },
+        { keys: ['KeyW', 'KeyD'], vector: norm(forward.x + right.x, forward.z + right.z) },
+        { keys: ['KeyS', 'KeyA'], vector: norm(-forward.x - right.x, -forward.z - right.z) },
+        { keys: ['KeyS', 'KeyD'], vector: norm(-forward.x + right.x, -forward.z + right.z) },
+      ]
+      let best = null
+      let bestDot = 0.2
+      for (const option of options) {
+        const dot = option.vector.x * desired.x + option.vector.z * desired.z
+        if (dot > bestDot) {
+          best = option
+          bestDot = dot
+        }
+      }
+      if (!best) break
+      await setKeys(new Set(best.keys))
       await page.waitForTimeout(110)
       if (Date.now() - progressAt > 3200) break
     }
@@ -331,9 +351,19 @@ async function main() {
     await page.setInputFiles('#floor-plan', plan)
     await page.click('button[type="submit"]')
 
-    await page.getByText('Detection stopped at Detect rooms and openings').waitFor({
+    await page.getByText('Detection stopped at Detecting rooms and connections').waitFor({
       state: 'visible',
       timeout: 180000,
+    })
+    // Diagnostics (and the retry options they drive) load after the failure
+    // panel, so wait for the control instead of reading the body immediately.
+    await page.getByText('Retry with different preprocessing').waitFor({
+      state: 'visible',
+      timeout: 60000,
+    })
+    await page.getByText('Correct room outlines manually').waitFor({
+      state: 'visible',
+      timeout: 60000,
     })
     const failureText = await page.locator('body').innerText()
     assert.match(failureText, /no_enclosed_rooms/)
@@ -502,7 +532,7 @@ async function main() {
     assert.ok(Math.abs(start.y - 1.65) < 0.05)
     const body = await page.locator('body').innerText()
     assert.match(body, /2 rooms/)
-    assert.match(body, new RegExp(`${job.furniture_count} furniture items`))
+    assert.match(body, new RegExp(`${job.furniture_count} furniture\\b`))
     assert.match(body, /All rooms reachable/)
     assert.doesNotMatch(body, /photograph/i)
     const startRoom = roomAt(scene.collision.rooms, start.x, start.z)

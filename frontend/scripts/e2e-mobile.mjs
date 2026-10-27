@@ -153,12 +153,12 @@ async function main() {
 
     const body = await page.locator('body').innerText()
     assert.ok(
-      body.includes(`${job.furniture_count} furniture item`),
+      new RegExp(`\\b${job.furniture_count} furniture\\b`).test(body),
       `The viewer header should report ${job.furniture_count} furniture items`,
     )
     const overlay = await page.getByTestId('room-info-overlay').innerText()
     assert.ok(
-      overlay.includes(`${startNode.furniture_count} furniture item`),
+      new RegExp(`\\b${startNode.furniture_count} items?\\b`).test(overlay),
       `The room overlay should report ${startNode.furniture_count} furniture items`,
     )
 
@@ -186,16 +186,18 @@ async function main() {
     const yawDelta = Math.abs(afterLook.yaw - afterJoystick.yaw)
     assert.ok(yawDelta > 0.1, `Touch drag should rotate the view; yaw changed ${yawDelta.toFixed(3)}`)
 
-    const hideFurniture = page.getByRole('button', { name: 'Hide furniture' })
+    await page.getByRole('button', { name: 'Options' }).tap()
+    const hideFurniture = page.getByRole('button', { name: 'Furniture on' })
     await hideFurniture.scrollIntoViewIfNeeded()
     assert.equal(await hideFurniture.getAttribute('aria-pressed'), 'true')
     await hideFurniture.tap()
-    const showFurniture = page.getByRole('button', { name: 'Show furniture' })
+    const showFurniture = page.getByRole('button', { name: 'Furniture off' })
     await showFurniture.waitFor({ state: 'visible', timeout: 10000 })
     assert.equal(await showFurniture.getAttribute('aria-pressed'), 'false')
     await page.waitForTimeout(300)
     await showFurniture.tap()
-    await page.getByRole('button', { name: 'Hide furniture' }).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: 'Furniture on' }).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: 'Close' }).tap()
 
     await page.screenshot({ path: path.join(screenshotDir, 'tour-mobile.png') })
 

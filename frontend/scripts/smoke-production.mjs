@@ -132,11 +132,20 @@ async function main() {
     assert.ok(body.includes('Measured dimensions'), 'Tour header should show measured scale')
     assert.ok(body.includes(`${job.room_count} rooms`), 'Tour should report the detected rooms')
     assert.ok(
-      body.includes(`${job.furniture_count} furniture items`),
+      new RegExp(`${job.furniture_count} furniture\\b`).test(body),
       'Tour should report the real furniture count',
     )
+    const styleLabels = {
+      modern: 'Modern Contemporary',
+      minimalist: 'Minimalist',
+      scandinavian: 'Scandinavian',
+      warm_luxury: 'Warm Luxury',
+    }
     assert.ok(
-      new RegExp(`${job.furnishing_style} style`, 'i').test(body),
+      new RegExp(
+        `${styleLabels[job.furnishing_style] ?? job.furnishing_style} style`,
+        'i',
+      ).test(body),
       'Tour should report the style',
     )
     assert.ok(body.includes('All rooms reachable'), 'Tour should report navigation validation')
@@ -160,7 +169,7 @@ async function main() {
       'Furnishing panel should report the job variant and furniture count',
     )
     const roomSummary = page.getByTestId('room-summary')
-    const summaryText = await roomSummary.innerText()
+    const summaryText = (await roomSummary.innerText()).toLowerCase()
     for (const roomType of detail.room_types ?? []) {
       assert.ok(
         summaryText.includes(String(roomType.room_type).replace(/_/g, ' ')),
@@ -169,11 +178,11 @@ async function main() {
     }
     await page.getByRole('button', { name: 'Hide furnishing' }).click()
 
-    const hideFurniture = page.getByRole('button', { name: 'Hide furniture' })
+    const hideFurniture = page.getByRole('button', { name: 'Furniture on' })
     await hideFurniture.waitFor({ state: 'visible', timeout: 15000 })
     assert.equal(await hideFurniture.getAttribute('aria-pressed'), 'true')
     await hideFurniture.click()
-    const showFurniture = page.getByRole('button', { name: 'Show furniture' })
+    const showFurniture = page.getByRole('button', { name: 'Furniture off' })
     await showFurniture.waitFor({ state: 'visible', timeout: 15000 })
     assert.equal(await showFurniture.getAttribute('aria-pressed'), 'false')
     await page.waitForTimeout(300)

@@ -21,61 +21,91 @@ const MAX_FLOOR_PLAN_BYTES = 15 * 1024 * 1024
 const TERMINAL = new Set(['completed', 'failed', 'cancelled'])
 
 const STYLES = [
-  { value: 'modern', label: 'Modern' },
+  { value: 'modern', label: 'Modern Contemporary' },
   { value: 'minimalist', label: 'Minimalist' },
   { value: 'scandinavian', label: 'Scandinavian' },
+  { value: 'warm_luxury', label: 'Warm Luxury' },
 ]
+
+const STYLE_PALETTES: Record<string, { note: string; swatches: string[] }> = {
+  modern: {
+    note: 'Charcoal fabrics, walnut, muted teal accents',
+    swatches: ['#59616b', '#7d5a3c', '#2f6f6f', '#dedbd3'],
+  },
+  minimalist: {
+    note: 'Warm white, pale oak, low-contrast stone',
+    swatches: ['#d6d1c7', '#b6a187', '#e6e2da', '#c7c3b9'],
+  },
+  scandinavian: {
+    note: 'Light timber, soft wool, quiet greens',
+    swatches: ['#dfe3dc', '#c49a6c', '#4c7a55', '#f3efe6'],
+  },
+  warm_luxury: {
+    note: 'Walnut, brushed brass, deep forest and cream bouclé',
+    swatches: ['#6b4a2f', '#c0a061', '#33423a', '#efe7d6'],
+  },
+}
 
 const STAGES = [
   {
     key: 'uploading',
     label: 'Upload floor plan',
-    detail: 'Original plan preserved unchanged for this job',
+    detail: 'Your original plan is kept unchanged for this project',
   },
   {
     key: 'parsing_floor_plan',
-    label: 'Parse floor plan',
-    detail: 'Validate the image, normalise, threshold wall candidates',
+    label: 'Analyzing floor plan',
+    detail: 'Reading walls, windows and scale from your upload',
   },
   {
     key: 'detecting_rooms_openings',
-    label: 'Detect rooms and openings',
-    detail: 'Wall bands, enclosed regions, doorways and windows',
+    label: 'Detecting rooms and connections',
+    detail: 'Finding rooms, openings and how the spaces connect',
   },
   {
     key: 'validating_room_layout',
-    label: 'Validate room layout',
-    detail: 'Room connectivity, scale and footprint',
+    label: 'Checking room layout',
+    detail: 'Confirming rooms are enclosed and the plan is consistent',
+  },
+  {
+    key: 'awaiting_room_types',
+    label: 'Confirm room types',
+    detail: 'Your review of each room before furniture is placed',
+  },
+  {
+    key: 'optimizing_openings',
+    label: 'Optimizing doors and walkways',
+    detail: 'Repairing gaps, doorways and routes between rooms',
   },
   {
     key: 'generating_geometry',
-    label: 'Generate 3D geometry',
+    label: 'Building the 3D house',
     detail: 'Floors, walls, ceilings, openings and room graph',
   },
   {
     key: 'placing_furniture',
-    label: 'Place furniture',
-    detail: 'Wall anchoring, clearances and 3D asset bounds per room type',
+    label: 'Arranging furniture',
+    detail: 'Furnishing each room without blocking walkways',
   },
   {
     key: 'generating_lighting_materials',
-    label: 'Generate lighting and materials',
+    label: 'Finishing materials and lighting',
     detail: 'Room lighting, PBR materials and shadow setup',
   },
   {
     key: 'validating_navigation_collisions',
-    label: 'Validate navigation and collisions',
-    detail: 'Spawn, doorway access, furniture bounds and room reachability',
+    label: 'Testing navigation',
+    detail: 'Walking every route to confirm rooms are reachable',
   },
   {
     key: 'loading_walkthrough',
-    label: 'Load walkthrough',
-    detail: 'Export GLB, collision, room graph and furniture manifest',
+    label: 'Preparing walkthrough',
+    detail: 'Exporting the scene, collisions and room graph',
   },
   {
     key: 'completed',
-    label: 'Completed',
-    detail: 'Validated scene, furniture and walkthrough ready',
+    label: 'Ready to explore',
+    detail: 'Validated walkthrough ready',
   },
 ]
 
@@ -89,16 +119,17 @@ const STAGE_INDEX: Record<string, number> = {
   validating_room_layout: 3,
   validating_layout: 3,
   awaiting_room_types: 4,
-  generating_geometry: 4,
-  building_geometry: 4,
-  texturing: 4,
-  exporting: 8,
-  placing_furniture: 5,
-  generating_lighting_materials: 6,
-  validating_navigation_collisions: 7,
-  loading_walkthrough: 8,
-  validating_assets: 8,
-  completed: 9,
+  optimizing_openings: 5,
+  generating_geometry: 6,
+  building_geometry: 6,
+  texturing: 6,
+  placing_furniture: 7,
+  generating_lighting_materials: 8,
+  validating_navigation_collisions: 9,
+  exporting: 10,
+  loading_walkthrough: 10,
+  validating_assets: 10,
+  completed: 11,
 }
 
 function stageIndex(key?: string | null): number {
@@ -158,6 +189,22 @@ export default function CreateTourPage() {
   const [planSize, setPlanSize] = useState<{ width: number; height: number } | null>(null)
   const [manualSubmitting, setManualSubmitting] = useState(false)
   const planCanvasRef = useRef<SVGSVGElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [dragging, setDragging] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!floorPlan || !floorPlan.type.startsWith('image/')) {
+      const frame = requestAnimationFrame(() => setPreviewUrl(null))
+      return () => cancelAnimationFrame(frame)
+    }
+    const url = URL.createObjectURL(floorPlan)
+    const frame = requestAnimationFrame(() => setPreviewUrl(url))
+    return () => {
+      cancelAnimationFrame(frame)
+      URL.revokeObjectURL(url)
+    }
+  }, [floorPlan])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -231,7 +278,7 @@ export default function CreateTourPage() {
 
   const partialNavigation = job?.status === 'completed' && job.navigation_available === false
   const diagnosticsJobId =
-    job?.status === 'failed' || partialNavigation ? job?.job_id ?? null : null
+    job?.status === 'failed' || job?.status === 'completed' ? job?.job_id ?? null : null
   const jobRetryCount = job?.retry_count ?? 0
 
   useEffect(() => {
@@ -255,22 +302,46 @@ export default function CreateTourPage() {
     return () => controller.abort()
   }, [diagnosticsJobId, jobRetryCount])
 
-  const handleFloorPlanUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setError(null)
-    const file = event.target.files?.[0]
-    if (!file) return
+  const validateFloorPlan = (file: File): string | null => {
     const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'application/pdf']
     if (!validTypes.includes(file.type)) {
-      setError('Floor plan must be a PNG, JPG, JPEG or PDF file.')
-      event.target.value = ''
-      return
+      return 'Floor plan must be a PNG, JPG, JPEG or PDF file.'
     }
     if (file.size > MAX_FLOOR_PLAN_BYTES) {
-      setError(`Floor plan is too large (${formatBytes(file.size)}). Maximum 15 MB.`)
-      event.target.value = ''
+      return `Floor plan is too large (${formatBytes(file.size)}). Maximum 15 MB.`
+    }
+    if (file.size === 0) {
+      return 'That file is empty. Choose a readable floor plan image.'
+    }
+    return null
+  }
+
+  const applyFloorPlan = (file: File | null) => {
+    setError(null)
+    if (!file) return
+    const problem = validateFloorPlan(file)
+    if (problem) {
+      setError(problem)
+      if (fileInputRef.current) fileInputRef.current.value = ''
       return
     }
     setFloorPlan(file)
+  }
+
+  const handleFloorPlanUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    applyFloorPlan(event.target.files?.[0] ?? null)
+  }
+
+  const clearFloorPlan = () => {
+    setFloorPlan(null)
+    setError(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    setDragging(false)
+    applyFloorPlan(event.dataTransfer.files?.[0] ?? null)
   }
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -448,43 +519,68 @@ export default function CreateTourPage() {
       artifact.type === 'png' &&
       ['rooms_detected.png', 'barrier_overlay.png', 'walls_mask.png'].includes(artifact.name),
   )
+  const repair = diagnostics?.repair
+  const repairAttemptCount =
+    typeof repair?.attempt_count === 'number'
+      ? repair.attempt_count
+      : Array.isArray(repair?.attempts)
+        ? repair.attempts.length
+        : 0
+  const repairEntries = repair?.repairs ?? []
+  const repairCorrectionCount = repair?.repair_count ?? repairEntries.length
+  const repairUnresolved = repair?.unresolved ?? []
+  const repairArtifacts = (diagnostics?.artifacts ?? []).filter((artifact) =>
+    ['repair_log.json', 'house_model.json', 'validation_report.json'].includes(artifact.name),
+  )
+
+  const palette = STYLE_PALETTES[style] ?? STYLE_PALETTES.modern
+  const awaitingRoomCount = job?.room_type_review?.rooms ?? job?.room_count ?? null
 
   return (
-    <div className="min-h-screen bg-gray-900">
+    <div className="min-h-screen bg-ivory">
       <Navigation />
 
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold text-white">Create Property Tour</h1>
-            <p className="mt-1 max-w-2xl text-gray-400">
-              Upload a 2D floor plan. The engine parses walls, rooms and openings, asks you to
-              confirm the inferred room types, then builds a validated walkable scene and furnishes
-              every room from a built-in 3D asset library. No photographs are required.
+      <main className="shell pb-20 pt-10 sm:pt-12">
+        <div className="flex flex-wrap items-end justify-between gap-5">
+          <div className="animate-rise">
+            <p className="eyebrow">New reconstruction</p>
+            <h1 className="mt-2 text-[34px] leading-tight sm:text-[42px]">Create a walkthrough</h1>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-stone">
+              Upload a 2D floor plan. The engine vectorises walls and openings, segments the rooms,
+              asks you to confirm the inferred room types, then builds and validates a furnished
+              first-person scene. Photographs are never required.
             </p>
           </div>
           <div className="text-xs">
             {engine === null ? (
-              <span className="text-gray-500">Checking reconstruction engine...</span>
+              <span className="chip chip-neutral">Checking engine…</span>
             ) : engine.online ? (
-              <span className="rounded-full border border-emerald-500/40 bg-emerald-950/30 px-3 py-1 text-emerald-300">
-                Engine online · PDF plans {engine.pdf ? 'supported' : 'unavailable (use PNG/JPG)'}
-                {engine.assets ? ` · ${engine.assets} 3D assets` : ''}
+              <span className="chip chip-success">
+                <span className="h-1.5 w-1.5 rounded-full bg-success" aria-hidden="true" />
+                Engine online
+                <span className="font-normal opacity-70">
+                  · PDF {engine.pdf ? 'supported' : 'unavailable'}
+                  {engine.assets ? ` · ${engine.assets} 3D assets` : ''}
+                </span>
               </span>
             ) : (
-              <span className="rounded-full border border-rose-500/40 bg-rose-950/30 px-3 py-1 text-rose-300">
-                Engine offline at {RECONSTRUCTION_URL}
-              </span>
+              <span className="chip chip-danger">Engine offline at {RECONSTRUCTION_URL}</span>
             )}
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
-          <div className="rounded-lg bg-gray-800 p-6">
-            <h2 className="mb-6 text-xl font-semibold text-white">Property information</h2>
-            <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="mt-9 grid grid-cols-1 gap-7 lg:grid-cols-[minmax(0,1.02fr)_minmax(0,0.98fr)] lg:items-start">
+          <section className="card animate-rise p-6 sm:p-8">
+            <div className="flex items-baseline justify-between gap-3 border-b border-line pb-4">
+              <h2 className="text-[22px]">Property and plan</h2>
+              <span className="text-[11px] uppercase tracking-[0.14em] text-stone-light">
+                Step 1 of 2
+              </span>
+            </div>
+
+            <form onSubmit={handleSubmit} className="mt-6 space-y-6">
               <div>
-                <label htmlFor="project-name" className="mb-2 block text-sm font-medium text-gray-300">
+                <label htmlFor="project-name" className="label">
                   Project name *
                 </label>
                 <input
@@ -492,39 +588,105 @@ export default function CreateTourPage() {
                   type="text"
                   value={projectName}
                   onChange={(event) => setProjectName(event.target.value)}
-                  className="w-full rounded-lg border border-gray-600 bg-gray-700 px-4 py-2 text-white focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                  className="field"
                   placeholder="e.g. Oak Street apartment"
                   required
                 />
               </div>
 
               <div>
-                <label htmlFor="floor-plan" className="mb-2 block text-sm font-medium text-gray-300">
-                  Floor plan * (PNG, JPG, JPEG{engine?.pdf ? ', PDF' : ''}, max 15 MB)
-                </label>
+                <span className="label">Floor plan *</span>
                 <input
+                  ref={fileInputRef}
                   id="floor-plan"
                   type="file"
                   accept={engine?.pdf ? '.png,.jpg,.jpeg,.pdf' : '.png,.jpg,.jpeg'}
                   onChange={handleFloorPlanUpload}
-                  className="w-full rounded-lg border border-gray-600 bg-gray-700 px-4 py-2 text-white focus:border-transparent focus:ring-2 focus:ring-blue-500"
-                  required
+                  className="sr-only"
                 />
-                {floorPlan && (
-                  <p className="mt-2 text-sm text-green-400">
-                    {floorPlan.name} ({formatBytes(floorPlan.size)})
-                  </p>
-                )}
-                {engine && !engine.pdf && (
-                  <p className="mt-1 text-xs text-gray-500">
-                    PDF plans need poppler (`pdftoppm`) installed in the engine environment.
-                  </p>
-                )}
+                <div
+                  onDragOver={(event) => {
+                    event.preventDefault()
+                    setDragging(true)
+                  }}
+                  onDragLeave={() => setDragging(false)}
+                  onDrop={handleDrop}
+                  className={`overflow-hidden rounded-[12px] border border-dashed transition-colors ${
+                    dragging
+                      ? 'border-forest bg-forest/[0.05]'
+                      : 'border-line-strong bg-parchment/40'
+                  }`}
+                >
+                  {previewUrl ? (
+                    <div className="bg-surface">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={previewUrl}
+                        alt={`Uploaded floor plan preview: ${floorPlan?.name ?? 'floor plan'}`}
+                        className="mx-auto max-h-64 w-full object-contain p-4"
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center px-6 py-10 text-center">
+                      <span className="grid h-12 w-12 place-items-center rounded-xl border border-line-strong bg-surface text-forest">
+                        <svg viewBox="0 0 32 32" className="h-6 w-6" aria-hidden="true">
+                          <path
+                            d="M5 7h22v18H5zM5 15h9M14 15v10M21 7v8M21 15h6"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.3"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </span>
+                      <p className="mt-3 text-sm font-medium text-ink">
+                        {dragging ? 'Release to attach the plan' : 'Drop a floor plan here'}
+                      </p>
+                      <p className="mt-1 text-xs text-stone">
+                        PNG, JPG{engine?.pdf ? ', PDF' : ''} · up to 15 MB
+                        {engine && !engine.pdf ? ' · PDF needs poppler in the engine' : ''}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="btn btn-secondary btn-sm mt-4"
+                      >
+                        Choose file
+                      </button>
+                    </div>
+                  )}
+                  {floorPlan && (
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line bg-surface px-4 py-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-ink">{floorPlan.name}</p>
+                        <p className="text-[11px] text-stone">
+                          {formatBytes(floorPlan.size)} ·{' '}
+                          {floorPlan.type.replace('application/', '').replace('image/', '').toUpperCase()}
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="btn btn-secondary btn-sm"
+                        >
+                          Replace
+                        </button>
+                        <button type="button" onClick={clearFloorPlan} className="btn btn-ghost btn-sm">
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <p className="mt-2 text-[11px] leading-5 text-stone-light">
+                  The plan is the only geometry source and is preserved unchanged for this job.
+                </p>
               </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                 <div>
-                  <label htmlFor="floors" className="mb-2 block text-sm font-medium text-gray-300">
+                  <label htmlFor="floors" className="label">
                     Floors
                   </label>
                   <input
@@ -534,11 +696,11 @@ export default function CreateTourPage() {
                     max={5}
                     value={numFloors}
                     onChange={(event) => setNumFloors(parseInt(event.target.value) || 1)}
-                    className="w-full rounded-lg border border-gray-600 bg-gray-700 px-4 py-2 text-white focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                    className="field"
                   />
                 </div>
                 <div>
-                  <label htmlFor="known-width" className="mb-2 block text-sm font-medium text-gray-300">
+                  <label htmlFor="known-width" className="label">
                     Width (m)
                   </label>
                   <input
@@ -549,12 +711,12 @@ export default function CreateTourPage() {
                     max="100"
                     value={knownWidth}
                     onChange={(event) => setKnownWidth(event.target.value)}
-                    className="w-full rounded-lg border border-gray-600 bg-gray-700 px-4 py-2 text-white focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                    className="field"
                     placeholder="optional"
                   />
                 </div>
                 <div>
-                  <label htmlFor="known-length" className="mb-2 block text-sm font-medium text-gray-300">
+                  <label htmlFor="known-length" className="label">
                     Length (m)
                   </label>
                   <input
@@ -565,25 +727,25 @@ export default function CreateTourPage() {
                     max="100"
                     value={knownLength}
                     onChange={(event) => setKnownLength(event.target.value)}
-                    className="w-full rounded-lg border border-gray-600 bg-gray-700 px-4 py-2 text-white focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                    className="field"
                     placeholder="optional"
                   />
                 </div>
               </div>
-              <p className="-mt-3 text-xs text-gray-500">
-                Only the ground floor is currently reconstructed. Supplying both dimensions makes
-                the scale measured rather than estimated.
+              <p className="-mt-2 text-[11px] leading-5 text-stone-light">
+                Only the ground floor is reconstructed. Supplying both dimensions makes the scale
+                measured rather than estimated.
               </p>
 
               <div>
-                <label htmlFor="furnishing-style" className="mb-2 block text-sm font-medium text-gray-300">
+                <label htmlFor="furnishing-style" className="label">
                   Furniture style
                 </label>
                 <select
                   id="furnishing-style"
                   value={style}
                   onChange={(event) => setStyle(event.target.value)}
-                  className="w-full rounded-lg border border-gray-600 bg-gray-700 px-4 py-2 text-white focus:border-transparent focus:ring-2 focus:ring-blue-500"
+                  className="field"
                 >
                   {STYLES.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -591,555 +753,708 @@ export default function CreateTourPage() {
                     </option>
                   ))}
                 </select>
-                <p className="mt-2 text-sm text-gray-400">
-                  Furniture is placed deterministically with real 3D meshes and PBR materials.
-                  Photographs are not required and no external image-generation API is called.
-                  Room types are proposed from the plan and confirmed by you before furnishing.
+                <div className="mt-3 flex flex-wrap items-center gap-3 rounded-[10px] border border-line bg-parchment/50 px-3 py-2.5">
+                  <div className="flex gap-1.5" aria-hidden="true">
+                    {palette.swatches.map((hex) => (
+                      <span
+                        key={hex}
+                        className="h-6 w-6 rounded-[5px] border border-black/10"
+                        style={{ backgroundColor: hex }}
+                      />
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-stone">{palette.note}</p>
+                </div>
+                <p className="mt-2 text-[11px] leading-5 text-stone-light">
+                  Furniture is placed deterministically with real 3D meshes and PBR materials. No
+                  external image-generation API is called, and room types are confirmed by you
+                  before furnishing.
                 </p>
               </div>
 
               {error && (
-                <div className="rounded-lg border border-rose-500/40 bg-rose-950/40 p-3 text-sm text-rose-200">
+                <div className="rounded-[10px] border border-danger/30 bg-danger/[0.06] px-3.5 py-3 text-sm text-danger">
                   {error}
                 </div>
               )}
 
-              <button
-                type="submit"
-                disabled={busy}
-                className="w-full rounded-lg bg-blue-600 py-3 font-medium text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-gray-600"
-              >
-                {submitting ? 'Uploading...' : busy ? 'Reconstruction running...' : 'Generate furnished tour'}
+              <button type="submit" disabled={busy} className="btn btn-primary btn-lg w-full">
+                {submitting
+                  ? 'Uploading…'
+                  : busy
+                    ? 'Reconstruction running…'
+                    : 'Generate furnished tour'}
               </button>
-            </form>
-          </div>
-
-          <div className="rounded-lg bg-gray-800 p-6">
-            <h2 className="mb-4 text-xl font-semibold text-white">Reconstruction status</h2>
-
-            {!job && (
-              <p className="text-sm text-gray-400">
-                Job progress, real stage names and validation results will appear here after upload.
+              <p className="text-center text-[11px] leading-5 text-stone-light">
+                The job is stored by your local engine. Progress below reflects the actual pipeline
+                stage, never a simulated timer.
               </p>
-            )}
+            </form>
+          </section>
 
-            {job && (
-              <div className="space-y-4" aria-live="polite">
-                <div className="rounded-lg bg-gray-700 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="font-medium capitalize text-white">
-                      {failed && failedStageLabel
-                        ? `Failed during ${failedStageLabel}`
-                        : job.stage_label || job.current_stage.replace(/_/g, ' ')}
-                    </p>
-                    <span className="text-sm text-gray-300">{Math.round(job.progress)}%</span>
-                  </div>
-                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-gray-600">
-                    <div
-                      className={`h-full rounded-full transition-[width] duration-500 ${
-                        failed ? 'bg-rose-500' : completed ? 'bg-emerald-500' : 'bg-blue-500'
+          <section className="animate-rise delay-1 space-y-5">
+            <div className="card p-6">
+              <div className="flex items-center justify-between gap-3 border-b border-line pb-4">
+                <h2 className="text-[22px]">Reconstruction status</h2>
+                {job ? (
+                  <span className="flex items-center gap-1.5 text-[11px] text-stone">
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${
+                        completed ? 'bg-success' : failed ? 'bg-danger' : 'animate-pulse bg-bronze'
                       }`}
-                      style={{ width: `${Math.max(3, Math.round(job.progress))}%` }}
+                      aria-hidden="true"
                     />
-                  </div>
-                  <p className="mt-2 break-all text-xs text-gray-400">Job {job.job_id}</p>
-                  {job.error && (
-                    <p className="mt-3 break-words text-sm text-rose-300">{job.error}</p>
-                  )}
-                  {job.error_code && (
-                    <p className="mt-1 break-all font-mono text-[11px] text-rose-300/70">
-                      {job.error_code}
-                    </p>
-                  )}
-                  {awaitingRoomTypes && (
-                    <div className="mt-3 rounded border border-blue-500/40 bg-blue-950/30 p-3 text-xs text-blue-100">
-                      <p className="font-medium">Your review is required</p>
-                      <p className="mt-1 text-blue-100/80">
-                        The plan has been parsed and rooms have inferred types. Confirm or correct
-                        every room before furniture is placed and the walkthrough is generated.
-                      </p>
-                      <a
-                        href="#room-type-review"
-                        className="mt-2 inline-block rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-500"
-                      >
-                        Review room types
-                      </a>
-                    </div>
-                  )}
-                </div>
+                    {completed ? 'Complete' : failed ? 'Stopped' : 'Live'}
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-stone-light">Waiting for upload</span>
+                )}
+              </div>
 
-                <ol className="space-y-3">
-                  {STAGES.map((stage, index) => {
-                    const reached =
-                      completed || (currentStageIndex >= 0 && index < currentStageIndex)
-                    const active = !failed && !awaitingRoomTypes && currentStageIndex === index
-                    const stageFailed = failedStageIndex === index
-                    return (
-                      <li key={stage.key} className="flex items-start">
-                        <span
-                          className={`mr-3 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-xs font-bold ${
-                            stageFailed
-                              ? 'bg-rose-600 text-white'
-                              : active
-                                ? 'bg-blue-600 text-white'
-                                : reached
-                                  ? 'bg-emerald-700 text-white'
-                                  : 'bg-gray-700 text-gray-400'
-                          }`}
-                        >
-                          {stageFailed ? '!' : index + 1}
+              {!job && (
+                <div className="mt-5">
+                  <p className="text-sm leading-6 text-stone">
+                    Job progress, real stage names, and validation results appear here after you
+                    upload a plan. Every stage below reports engine events, not an animation.
+                  </p>
+                  <ol className="mt-5 space-y-3">
+                    {[
+                      ['Analyzing floor plan', 'Readability, wall polarity, scale'],
+                      ['Detecting rooms and connections', 'Rooms, doors, windows and links'],
+                      ['Optimizing doors and walkways', 'Gaps, openings and routes repaired'],
+                      ['Arranging furniture', 'Placement with clear walkways'],
+                      ['Testing navigation', 'Reachability checked on the real scene'],
+                      ['Preparing walkthrough', 'Scene, collisions and room graph'],
+                    ].map(([label, detail], index) => (
+                      <li key={label} className="flex items-start gap-3">
+                        <span className="mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full border border-line bg-parchment text-[11px] font-semibold text-stone">
+                          {index + 1}
                         </span>
                         <div>
-                          <p
-                            className={`font-medium ${
-                              stageFailed
-                                ? 'text-rose-300'
-                                : active
-                                  ? 'text-white'
-                                  : 'text-gray-300'
-                            }`}
-                          >
-                            {stage.label}
-                          </p>
-                          <p className="text-sm text-gray-500">{stage.detail}</p>
+                          <p className="text-[13px] font-medium text-ink">{label}</p>
+                          <p className="text-[11px] text-stone-light">{detail}</p>
                         </div>
                       </li>
-                    )
-                  })}
-                </ol>
+                    ))}
+                  </ol>
+                </div>
+              )}
 
-                {(failed || partialNavigation) && (
-                  <div className="rounded-lg border border-rose-500/40 bg-rose-950/20 p-4">
-                    <p className="text-sm font-semibold text-rose-200">
-                      {failed
-                        ? failedStageLabel
-                          ? `Detection stopped at ${failedStageLabel}`
-                          : 'Reconstruction did not produce a scene'
-                        : 'Completed with unreachable rooms'}
+              {job && (
+                <div className="mt-5 space-y-4" aria-live="polite">
+                  <div className="rounded-[10px] border border-line bg-parchment/60 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-medium capitalize text-ink">
+                        {failed && failedStageLabel
+                          ? `Failed during ${failedStageLabel}`
+                          : job.stage_label || job.current_stage.replace(/_/g, ' ')}
+                      </p>
+                      <span className="font-mono text-sm text-stone">
+                        {Math.round(job.progress)}%
+                      </span>
+                    </div>
+                    <div className="progress-track mt-3 !h-1.5 bg-ink/10">
+                      <div
+                        className={
+                          failed
+                            ? 'h-full rounded-full bg-danger'
+                            : completed
+                              ? 'h-full rounded-full bg-success'
+                              : 'progress-fill'
+                        }
+                        style={{ width: `${Math.max(3, Math.round(job.progress))}%` }}
+                      />
+                    </div>
+                    <p className="mt-2 break-all font-mono text-[11px] text-stone-light">
+                      Job {job.job_id}
                     </p>
-                    <p className="mt-1 break-words text-sm text-rose-100/90">
-                      {failed
-                        ? job.error ||
-                          'The engine rejected the inputs instead of substituting a sample.'
-                        : 'The scene passed geometry and asset validation, but at least one room has no detected doorway. The walkthrough is labelled partial navigation.'}
-                    </p>
-                    <p className="mt-2 text-xs text-rose-200/70">
-                      {failed
-                        ? 'Your original upload is preserved. Inspect what was detected, re-run with different preprocessing, or correct the room outlines below.'
-                        : 'Inspect what was detected, re-run automatic detection with different preprocessing, or correct the room outlines below. A re-run replaces this job’s scene.'}
-                    </p>
-
-                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <figure>
-                        <figcaption className="mb-1 text-[11px] uppercase tracking-wide text-gray-400">
-                          Original upload
-                        </figcaption>
-                        <a
-                          href={floorPlanPreviewUrl(job.job_id)}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={floorPlanPreviewUrl(job.job_id)}
-                            alt="Original floor plan uploaded for this job"
-                            className="max-h-56 w-full rounded border border-gray-600 bg-gray-950 object-contain"
-                          />
+                    {job.error && (
+                      <p className="mt-3 break-words text-sm text-danger">{job.error}</p>
+                    )}
+                    {job.error_code && (
+                      <p className="mt-1 break-all font-mono text-[11px] text-danger/70">
+                        {job.error_code}
+                      </p>
+                    )}
+                    {awaitingRoomTypes && (
+                      <div className="mt-3 rounded-[10px] border border-bronze/30 bg-bronze/[0.07] p-3 text-xs">
+                        <p className="font-semibold text-ink">Your review is required</p>
+                        <p className="mt-1 leading-5 text-stone">
+                          The plan has been parsed and{' '}
+                          {awaitingRoomCount != null
+                            ? `${awaitingRoomCount} room${awaitingRoomCount === 1 ? '' : 's'} have`
+                            : 'rooms have'}{' '}
+                          inferred types. Confirm or correct every room before furniture is placed
+                          and the walkthrough is generated.
+                        </p>
+                        <a href="#room-type-review" className="btn btn-bronze btn-sm mt-2.5">
+                          Review room types
                         </a>
-                      </figure>
-                      {diagnosticImages.map((artifact) => (
-                        <figure key={artifact.name}>
-                          <figcaption className="mb-1 text-[11px] uppercase tracking-wide text-gray-400">
-                            {artifact.name.replace(/_/g, ' ').replace(/\.png$/i, '')}
+                      </div>
+                    )}
+                  </div>
+
+                  <ol className="space-y-3">
+                    {STAGES.map((stage, index) => {
+                      const reached =
+                        completed || (currentStageIndex >= 0 && index < currentStageIndex)
+                      const active = !failed && !awaitingRoomTypes && currentStageIndex === index
+                      const stageFailed = failedStageIndex === index
+                      return (
+                        <li key={stage.key} className="flex items-start gap-3">
+                          <span
+                            className={`mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-[11px] font-semibold ${
+                              stageFailed
+                                ? 'bg-danger text-white'
+                                : active
+                                  ? 'bg-forest text-ivory'
+                                  : reached
+                                    ? 'border border-forest/30 bg-forest/[0.08] text-forest'
+                                    : 'border border-line bg-parchment/60 text-stone-light'
+                            }`}
+                          >
+                            {stageFailed ? '!' : reached && !active ? '✓' : index + 1}
+                          </span>
+                          <div>
+                            <p
+                              className={`text-[13px] font-medium ${
+                                stageFailed
+                                  ? 'text-danger'
+                                  : active
+                                    ? 'text-ink'
+                                    : reached
+                                      ? 'text-ink-soft'
+                                      : 'text-stone'
+                              }`}
+                            >
+                              {stage.label}
+                            </p>
+                            <p className="mt-0.5 text-[11px] leading-5 text-stone-light">
+                              {stage.detail}
+                            </p>
+                          </div>
+                        </li>
+                      )
+                    })}
+                  </ol>
+
+                  {(failed || partialNavigation) && (
+                    <div className="rounded-[12px] border border-danger/30 bg-danger/[0.05] p-4">
+                      <p className="text-sm font-semibold text-danger">
+                        {failed
+                          ? failedStageLabel
+                            ? `Detection stopped at ${failedStageLabel}`
+                            : 'Reconstruction did not produce a scene'
+                          : 'Completed with unreachable rooms'}
+                      </p>
+                      <p className="mt-1 break-words text-sm leading-6 text-ink-soft">
+                        {failed
+                          ? job.error ||
+                            'The engine rejected the inputs instead of substituting a sample.'
+                          : 'The scene passed geometry and asset validation, but at least one room has no detected doorway. The walkthrough is labelled partial navigation.'}
+                      </p>
+                      <p className="mt-2 text-[11px] leading-5 text-stone">
+                        {failed
+                          ? 'Your original upload is preserved. Inspect what was detected, re-run with different preprocessing, or correct the room outlines below.'
+                          : 'Inspect what was detected, re-run automatic detection with different preprocessing, or correct the room outlines below. A re-run replaces this job’s scene.'}
+                      </p>
+
+                      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <figure>
+                          <figcaption className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-stone">
+                            Original upload
                           </figcaption>
                           <a
-                            href={`${RECONSTRUCTION_URL}${artifact.url}`}
+                            href={floorPlanPreviewUrl(job.job_id)}
                             target="_blank"
                             rel="noreferrer"
                           >
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
-                              src={`${RECONSTRUCTION_URL}${artifact.url}`}
-                              alt={`Detection artifact ${artifact.name}`}
-                              className="max-h-56 w-full rounded border border-gray-600 bg-gray-950 object-contain"
+                              src={floorPlanPreviewUrl(job.job_id)}
+                              alt="Original floor plan uploaded for this job"
+                              className="max-h-56 w-full rounded-[8px] border border-line bg-surface object-contain"
                             />
                           </a>
                         </figure>
-                      ))}
-                    </div>
-                    {diagnosticsError && (
-                      <p className="mt-2 text-xs text-amber-300">
-                        Diagnostics could not be loaded: {diagnosticsError}
-                      </p>
-                    )}
-                    {(diagnostics?.artifacts.length ?? 0) > 0 && (
-                      <details className="mt-3 text-xs text-gray-300">
-                        <summary className="cursor-pointer text-gray-400">
-                          All diagnostic files (saved for this job)
-                        </summary>
-                        <ul className="mt-1 space-y-1">
-                          {diagnostics?.artifacts.map((artifact) => (
-                            <li key={artifact.name}>
-                              <a
-                                href={`${RECONSTRUCTION_URL}${artifact.url}`}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-blue-300 hover:text-blue-200"
-                              >
-                                {artifact.name}
-                              </a>{' '}
-                              <span className="text-gray-500">
-                                {formatBytes(artifact.size_bytes)}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      </details>
-                    )}
-
-                    {(diagnostics?.preprocessing.options.length ?? 0) > 0 && (
-                      <div className="mt-4">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-300">
-                          Retry with different preprocessing
+                        {diagnosticImages.map((artifact) => (
+                          <figure key={artifact.name}>
+                            <figcaption className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-stone">
+                              {artifact.name.replace(/_/g, ' ').replace(/\.png$/i, '')}
+                            </figcaption>
+                            <a
+                              href={`${RECONSTRUCTION_URL}${artifact.url}`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={`${RECONSTRUCTION_URL}${artifact.url}`}
+                                alt={`Detection artifact ${artifact.name}`}
+                                className="max-h-56 w-full rounded-[8px] border border-line bg-surface object-contain"
+                              />
+                            </a>
+                          </figure>
+                        ))}
+                      </div>
+                      {diagnosticsError && (
+                        <p className="mt-2 text-xs text-warning">
+                          Diagnostics could not be loaded: {diagnosticsError}
                         </p>
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {diagnostics?.preprocessing.options.map((option) => (
+                      )}
+                      {(diagnostics?.artifacts.length ?? 0) > 0 && (
+                        <details className="mt-3 text-xs text-stone">
+                          <summary className="cursor-pointer text-ink-soft">
+                            All diagnostic files (saved for this job)
+                          </summary>
+                          <ul className="mt-1 space-y-1">
+                            {diagnostics?.artifacts.map((artifact) => (
+                              <li key={artifact.name}>
+                                <a
+                                  href={`${RECONSTRUCTION_URL}${artifact.url}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-forest-soft hover:text-forest"
+                                >
+                                  {artifact.name}
+                                </a>{' '}
+                                <span className="text-stone-light">
+                                  {formatBytes(artifact.size_bytes)}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
+                      )}
+
+                      {(diagnostics?.preprocessing.options.length ?? 0) > 0 && (
+                        <div className="mt-4">
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.13em] text-stone">
+                            Retry with different preprocessing
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {diagnostics?.preprocessing.options.map((option) => (
+                              <button
+                                key={`${option.wall_polarity}-${option.sealing}-${option.label}`}
+                                type="button"
+                                disabled={retrying}
+                                onClick={() =>
+                                  handleRetry({
+                                    wall_polarity: option.wall_polarity,
+                                    sealing: option.sealing,
+                                  })
+                                }
+                                className="btn btn-secondary btn-sm flex-col !items-start !gap-0.5 text-left"
+                              >
+                                <span className="block font-medium">{option.label}</span>
+                                <span className="block font-mono text-[10px] font-normal text-stone">
+                                  {option.wall_polarity} · {option.sealing}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => setShowCorrection((value) => !value)}
+                        className="btn btn-secondary btn-sm mt-4"
+                      >
+                        {showCorrection ? 'Hide manual correction' : 'Correct room outlines manually'}
+                      </button>
+
+                      {showCorrection && (
+                        <div className="mt-3 rounded-[10px] border border-line bg-surface p-3">
+                          <div className="flex flex-wrap items-center gap-2 text-xs">
                             <button
-                              key={`${option.wall_polarity}-${option.sealing}-${option.label}`}
                               type="button"
-                              disabled={retrying}
-                              onClick={() =>
-                                handleRetry({
-                                  wall_polarity: option.wall_polarity,
-                                  sealing: option.sealing,
+                              onClick={() => setManualTool('room')}
+                              className={`rounded-[7px] px-3 py-1.5 font-medium transition-colors ${
+                                manualTool === 'room'
+                                  ? 'bg-forest text-ivory'
+                                  : 'bg-parchment text-stone hover:text-ink'
+                              }`}
+                            >
+                              Draw room rectangle
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setManualTool('doorway')}
+                              className={`rounded-[7px] px-3 py-1.5 font-medium transition-colors ${
+                                manualTool === 'doorway'
+                                  ? 'bg-bronze text-white'
+                                  : 'bg-parchment text-stone hover:text-ink'
+                              }`}
+                            >
+                              Place doorway
+                            </button>
+                            {manualTool === 'doorway' && (
+                              <select
+                                value={doorwayOrientation}
+                                onChange={(event) =>
+                                  setDoorwayOrientation(
+                                    event.target.value === 'horizontal'
+                                      ? 'horizontal'
+                                      : 'vertical',
+                                  )
+                                }
+                                className="rounded-[7px] border border-line-strong bg-surface px-2 py-1.5 text-stone"
+                              >
+                                <option value="vertical">On a vertical wall</option>
+                                <option value="horizontal">On a horizontal wall</option>
+                              </select>
+                            )}
+                          </div>
+
+                          <div className="relative mt-3 select-none overflow-hidden rounded-[8px] border border-line bg-surface">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={floorPlanPreviewUrl(job.job_id)}
+                              alt="Floor plan for manual room-outline correction"
+                              draggable={false}
+                              className="block h-auto w-full"
+                              onLoad={(event) =>
+                                setPlanSize({
+                                  width: event.currentTarget.naturalWidth,
+                                  height: event.currentTarget.naturalHeight,
                                 })
                               }
-                              className="rounded border border-gray-600 bg-gray-800 px-3 py-2 text-left text-xs text-gray-200 hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                              <span className="block font-medium">{option.label}</span>
-                              <span className="mt-0.5 block font-mono text-[10px] text-gray-400">
-                                {option.wall_polarity} · {option.sealing}
-                              </span>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={() => setShowCorrection((value) => !value)}
-                      className="mt-4 rounded-lg border border-gray-600 px-4 py-2 text-sm font-medium text-gray-100 hover:bg-gray-700"
-                    >
-                      {showCorrection ? 'Hide manual correction' : 'Correct room outlines manually'}
-                    </button>
-
-                    {showCorrection && (
-                      <div className="mt-3 rounded-lg border border-gray-600 bg-gray-900/70 p-3">
-                        <div className="flex flex-wrap items-center gap-2 text-xs">
-                          <button
-                            type="button"
-                            onClick={() => setManualTool('room')}
-                            className={`rounded px-3 py-1.5 font-medium ${
-                              manualTool === 'room'
-                                ? 'bg-blue-600 text-white'
-                                : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                            }`}
-                          >
-                            Draw room rectangle
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setManualTool('doorway')}
-                            className={`rounded px-3 py-1.5 font-medium ${
-                              manualTool === 'doorway'
-                                ? 'bg-amber-600 text-white'
-                                : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
-                            }`}
-                          >
-                            Place doorway
-                          </button>
-                          {manualTool === 'doorway' && (
-                            <select
-                              value={doorwayOrientation}
-                              onChange={(event) =>
-                                setDoorwayOrientation(
-                                  event.target.value === 'horizontal'
-                                    ? 'horizontal'
-                                    : 'vertical',
-                                )
-                              }
-                              className="rounded border border-gray-600 bg-gray-800 px-2 py-1.5 text-gray-200"
-                            >
-                              <option value="vertical">On a vertical wall</option>
-                              <option value="horizontal">On a horizontal wall</option>
-                            </select>
-                          )}
-                        </div>
-
-                        <div className="relative mt-3 select-none overflow-hidden rounded border border-gray-600 bg-gray-950">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img
-                            src={floorPlanPreviewUrl(job.job_id)}
-                            alt="Floor plan for manual room-outline correction"
-                            draggable={false}
-                            className="block h-auto w-full"
-                            onLoad={(event) =>
-                              setPlanSize({
-                                width: event.currentTarget.naturalWidth,
-                                height: event.currentTarget.naturalHeight,
-                              })
-                            }
-                          />
-                          {planSize && (
-                            <svg
-                              ref={planCanvasRef}
-                              viewBox={`0 0 ${planSize.width} ${planSize.height}`}
-                              preserveAspectRatio="none"
-                              className={`absolute inset-0 h-full w-full touch-none ${
-                                manualTool === 'room' ? 'cursor-crosshair' : 'cursor-cell'
-                              }`}
-                              onPointerDown={handlePlanPointerDown}
-                              onPointerMove={handlePlanPointerMove}
-                              onPointerUp={handlePlanPointerUp}
-                              onPointerCancel={() => {
-                                setDragStart(null)
-                                setDragCurrent(null)
-                              }}
-                            >
-                              {manualRooms.map((polygon, index) => (
-                                <polygon
-                                  key={`manual-room-${index}`}
-                                  points={polygon.map(([x, y]) => `${x},${y}`).join(' ')}
-                                  fill="rgba(59,130,246,0.28)"
-                                  stroke="#60a5fa"
-                                  strokeWidth={Math.max(2, planSize.width / 300)}
-                                />
-                              ))}
-                              {dragStart && dragCurrent && (
-                                <rect
-                                  x={Math.min(dragStart[0], dragCurrent[0])}
-                                  y={Math.min(dragStart[1], dragCurrent[1])}
-                                  width={Math.abs(dragStart[0] - dragCurrent[0])}
-                                  height={Math.abs(dragStart[1] - dragCurrent[1])}
-                                  fill="rgba(59,130,246,0.2)"
-                                  stroke="#93c5fd"
-                                  strokeDasharray="6 4"
-                                  strokeWidth={Math.max(2, planSize.width / 300)}
-                                />
-                              )}
-                              {manualDoorways.map((doorway, index) => {
-                                const half = Math.max(12, planSize.width * 0.045)
-                                const [x, y] = doorway.center_px
-                                const strokeWidth = Math.max(3, planSize.width / 220)
-                                return doorway.orientation === 'horizontal' ? (
-                                  <line
-                                    key={`manual-door-${index}`}
-                                    x1={x - half}
-                                    y1={y}
-                                    x2={x + half}
-                                    y2={y}
-                                    stroke="#fbbf24"
-                                    strokeWidth={strokeWidth}
+                            />
+                            {planSize && (
+                              <svg
+                                ref={planCanvasRef}
+                                viewBox={`0 0 ${planSize.width} ${planSize.height}`}
+                                preserveAspectRatio="none"
+                                className={`absolute inset-0 h-full w-full touch-none ${
+                                  manualTool === 'room' ? 'cursor-crosshair' : 'cursor-cell'
+                                }`}
+                                onPointerDown={handlePlanPointerDown}
+                                onPointerMove={handlePlanPointerMove}
+                                onPointerUp={handlePlanPointerUp}
+                                onPointerCancel={() => {
+                                  setDragStart(null)
+                                  setDragCurrent(null)
+                                }}
+                              >
+                                {manualRooms.map((polygon, index) => (
+                                  <polygon
+                                    key={`manual-room-${index}`}
+                                    points={polygon.map(([x, y]) => `${x},${y}`).join(' ')}
+                                    fill="rgba(35,57,46,0.20)"
+                                    stroke="#23392e"
+                                    strokeWidth={Math.max(2, planSize.width / 300)}
                                   />
-                                ) : (
-                                  <line
-                                    key={`manual-door-${index}`}
-                                    x1={x}
-                                    y1={y - half}
-                                    x2={x}
-                                    y2={y + half}
-                                    stroke="#fbbf24"
-                                    strokeWidth={strokeWidth}
+                                ))}
+                                {dragStart && dragCurrent && (
+                                  <rect
+                                    x={Math.min(dragStart[0], dragCurrent[0])}
+                                    y={Math.min(dragStart[1], dragCurrent[1])}
+                                    width={Math.abs(dragStart[0] - dragCurrent[0])}
+                                    height={Math.abs(dragStart[1] - dragCurrent[1])}
+                                    fill="rgba(164,123,76,0.16)"
+                                    stroke="#a47b4c"
+                                    strokeDasharray="6 4"
+                                    strokeWidth={Math.max(2, planSize.width / 300)}
                                   />
+                                )}
+                                {manualDoorways.map((doorway, index) => {
+                                  const half = Math.max(12, planSize.width * 0.045)
+                                  const [x, y] = doorway.center_px
+                                  const strokeWidth = Math.max(3, planSize.width / 220)
+                                  return doorway.orientation === 'horizontal' ? (
+                                    <line
+                                      key={`manual-door-${index}`}
+                                      x1={x - half}
+                                      y1={y}
+                                      x2={x + half}
+                                      y2={y}
+                                      stroke="#b0603f"
+                                      strokeWidth={strokeWidth}
+                                    />
+                                  ) : (
+                                    <line
+                                      key={`manual-door-${index}`}
+                                      x1={x}
+                                      y1={y - half}
+                                      x2={x}
+                                      y2={y + half}
+                                      stroke="#b0603f"
+                                      strokeWidth={strokeWidth}
+                                    />
+                                  )
+                                })}
+                              </svg>
+                            )}
+                          </div>
+                          <p className="mt-2 text-[11px] leading-5 text-stone">
+                            Drag to draw one axis-aligned rectangle per room. For each doorway,
+                            choose its wall orientation and click on the shared wall. Doorways may
+                            sit on room boundaries or the exterior wall.
+                          </p>
+
+                          {manualRooms.length > 0 && (
+                            <ul className="mt-3 space-y-1 text-[11px] text-ink-soft">
+                              {manualRooms.map((polygon, index) => {
+                                const xs = polygon.map((point) => point[0])
+                                const ys = polygon.map((point) => point[1])
+                                return (
+                                  <li
+                                    key={`room-row-${index}`}
+                                    className="flex items-center justify-between gap-2 rounded-[6px] bg-parchment px-2 py-1"
+                                  >
+                                    <span>
+                                      Room {index + 1}: x {Math.min(...xs)}–{Math.max(...xs)} px, y{' '}
+                                      {Math.min(...ys)}–{Math.max(...ys)} px
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setManualRooms((previous) =>
+                                          previous.filter((_, itemIndex) => itemIndex !== index),
+                                        )
+                                      }
+                                      className="text-danger hover:opacity-70"
+                                    >
+                                      Remove
+                                    </button>
+                                  </li>
                                 )
                               })}
-                            </svg>
+                            </ul>
                           )}
-                        </div>
-                        <p className="mt-2 text-xs text-gray-400">
-                          Drag to draw one axis-aligned rectangle per room. For each doorway,
-                          choose its wall orientation and click on the shared wall. Doorways may
-                          sit on room boundaries or the exterior wall.
-                        </p>
 
-                        {manualRooms.length > 0 && (
-                          <ul className="mt-3 space-y-1 text-xs text-gray-300">
-                            {manualRooms.map((polygon, index) => {
-                              const xs = polygon.map((point) => point[0])
-                              const ys = polygon.map((point) => point[1])
-                              return (
+                          {manualDoorways.length > 0 && (
+                            <ul className="mt-2 space-y-1 text-[11px] text-ink-soft">
+                              {manualDoorways.map((doorway, index) => (
                                 <li
-                                  key={`room-row-${index}`}
-                                  className="flex items-center justify-between gap-2 rounded bg-gray-800 px-2 py-1"
+                                  key={`door-row-${index}`}
+                                  className="flex items-center justify-between gap-2 rounded-[6px] bg-bronze/10 px-2 py-1"
                                 >
                                   <span>
-                                    Room {index + 1}: x {Math.min(...xs)}–{Math.max(...xs)} px, y{' '}
-                                    {Math.min(...ys)}–{Math.max(...ys)} px
+                                    Doorway {index + 1}: {doorway.orientation} wall at (
+                                    {doorway.center_px[0]}, {doorway.center_px[1]}) px
                                   </span>
                                   <button
                                     type="button"
                                     onClick={() =>
-                                      setManualRooms((previous) =>
+                                      setManualDoorways((previous) =>
                                         previous.filter((_, itemIndex) => itemIndex !== index),
                                       )
                                     }
-                                    className="text-rose-300 hover:text-rose-200"
+                                    className="text-danger hover:opacity-70"
                                   >
                                     Remove
                                   </button>
                                 </li>
-                              )
-                            })}
-                          </ul>
-                        )}
+                              ))}
+                            </ul>
+                          )}
 
-                        {manualDoorways.length > 0 && (
-                          <ul className="mt-2 space-y-1 text-xs text-amber-100/90">
-                            {manualDoorways.map((doorway, index) => (
-                              <li
-                                key={`door-row-${index}`}
-                                className="flex items-center justify-between gap-2 rounded bg-amber-950/40 px-2 py-1"
-                              >
-                                <span>
-                                  Doorway {index + 1}: {doorway.orientation} wall at (
-                                  {doorway.center_px[0]}, {doorway.center_px[1]}) px
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={handleManualSubmit}
+                              disabled={manualSubmitting || manualRooms.length === 0}
+                              className="btn btn-primary btn-sm"
+                            >
+                              {manualSubmitting
+                                ? 'Submitting…'
+                                : 'Reconstruct from corrected outline'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setManualRooms([])
+                                setManualDoorways([])
+                                setDragStart(null)
+                                setDragCurrent(null)
+                              }}
+                              className="btn btn-secondary btn-sm"
+                            >
+                              Clear outline
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {(job.warnings?.length ?? 0) > 0 && (
+                    <div className="rounded-[10px] border border-warning/30 bg-warning/[0.07] p-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.13em] text-warning">
+                        Warnings
+                      </p>
+                      <ul className="mt-1 list-disc space-y-1 pl-4 text-[11px] leading-5 text-ink-soft">
+                        {job.warnings?.map((warning, index) => (
+                          <li key={`warning-${index}`}>{warning}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {(job.limitations?.length ?? 0) > 0 && completed && (
+                    <div className="rounded-[10px] border border-line bg-parchment/50 p-3">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.13em] text-stone">
+                        Known limitations
+                      </p>
+                      <ul className="mt-1 list-disc space-y-1 pl-4 text-[11px] leading-5 text-stone">
+                        {job.limitations?.map((limitation, index) => (
+                          <li key={`limitation-${index}`}>{limitation}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {completed && (
+                    <div className="rounded-[10px] border border-success/30 bg-success/[0.07] p-3 text-xs text-ink-soft">
+                      <p className="font-medium text-success">
+                        {job.room_count ?? 0} room{job.room_count === 1 ? '' : 's'} ·{' '}
+                        {job.furniture_count ?? 0} furniture item
+                        {job.furniture_count === 1 ? '' : 's'} ·{' '}
+                        <span className="capitalize">{job.furnishing_style ?? 'modern'}</span> style
+                        · {job.navigation_available ? 'all rooms reachable' : 'partial navigation'}
+                      </p>
+                      {(job.room_types?.length ?? 0) > 0 && (
+                        <p className="mt-1 leading-5 text-stone">
+                          {job.room_types
+                            ?.map((roomType) => roomType.name || `Room ${roomType.room_id + 1}`)
+                            .join(' · ')}
+                        </p>
+                      )}
+                      <Link href={`/tour/${job.job_id}`} className="btn btn-primary btn-sm mt-3">
+                        Open 3D walkthrough
+                      </Link>
+                    </div>
+                  )}
+
+                  {repair &&
+                    (repairAttemptCount > 0 ||
+                      repairCorrectionCount > 0 ||
+                      repairUnresolved.length > 0) && (
+                      <details className="rounded-[10px] border border-line bg-parchment/50 p-3 text-[11px] text-stone">
+                        <summary className="cursor-pointer text-ink-soft">
+                          Developer diagnostics — automatic repair ({repairAttemptCount} attempt
+                          {repairAttemptCount === 1 ? '' : 's'}, {repairCorrectionCount} correction
+                          {repairCorrectionCount === 1 ? '' : 's'}
+                          {repair?.conservative_fallback ? ', conservative fallback' : ''})
+                        </summary>
+                        <p className="mt-2 text-stone-light">
+                          Internal validate → diagnose → repair → revalidate record for this job.
+                          This panel is not shown in the buyer walkthrough.
+                        </p>
+                        {repair?.status && (
+                          <p className="mt-2 text-stone">
+                            Status: <span className="font-mono">{repair.status}</span>
+                            {diagnostics?.house_model?.spawn?.room_id !== undefined && (
+                              <>
+                                {' '}· spawn room{' '}
+                                <span className="font-mono">
+                                  {diagnostics.house_model.spawn.room_id}
                                 </span>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setManualDoorways((previous) =>
-                                      previous.filter((_, itemIndex) => itemIndex !== index),
-                                    )
-                                  }
-                                  className="text-rose-300 hover:text-rose-200"
-                                >
-                                  Remove
-                                </button>
+                              </>
+                            )}
+                            {typeof diagnostics?.house_model?.rooms === 'number' && (
+                              <>
+                                {' '}· {diagnostics.house_model.rooms} room(s),{' '}
+                                {diagnostics.house_model.doorways ?? 0} doorway(s),{' '}
+                                {diagnostics.house_model.walls ?? 0} wall segment(s)
+                              </>
+                            )}
+                          </p>
+                        )}
+                        {repairCorrectionCount > 0 && (
+                          <ul className="mt-2 list-disc space-y-1 pl-4">
+                            {repairEntries.map((entry, index) => (
+                              <li key={`repair-${entry.code ?? 'entry'}-${index}`}>
+                                <span className="font-mono text-stone">
+                                  {entry.code ?? 'repair'}
+                                </span>
+                                {entry.detail ? ` — ${entry.detail}` : ''}
+                                {entry.result ? (
+                                  <span className="text-stone-light"> ({entry.result})</span>
+                                ) : null}
                               </li>
                             ))}
                           </ul>
                         )}
-
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={handleManualSubmit}
-                            disabled={manualSubmitting || manualRooms.length === 0}
-                            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-gray-600"
-                          >
-                            {manualSubmitting ? 'Submitting...' : 'Reconstruct from corrected outline'}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setManualRooms([])
-                              setManualDoorways([])
-                              setDragStart(null)
-                              setDragCurrent(null)
-                            }}
-                            className="rounded-lg border border-gray-600 px-4 py-2 text-sm font-medium text-gray-200 hover:bg-gray-700"
-                          >
-                            Clear outline
-                          </button>
-                        </div>
-                      </div>
+                        {repairUnresolved.length > 0 && (
+                          <div className="mt-2">
+                            <p className="font-semibold text-danger">Unresolved</p>
+                            <ul className="mt-1 list-disc space-y-1 pl-4 text-danger/80">
+                              {repairUnresolved.map((entry, index) => (
+                                <li key={`unresolved-${index}`}>{entry}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {repairArtifacts.length > 0 && (
+                          <p className="mt-2 flex flex-wrap gap-3">
+                            {repairArtifacts.map((artifact) => (
+                              <a
+                                key={artifact.name}
+                                href={`${RECONSTRUCTION_URL}${artifact.url}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-forest-soft hover:text-forest"
+                              >
+                                {artifact.name}
+                              </a>
+                            ))}
+                          </p>
+                        )}
+                      </details>
                     )}
-                  </div>
-                )}
 
-                {(job.warnings?.length ?? 0) > 0 && (
-                  <div className="rounded-lg border border-amber-500/40 bg-amber-950/30 p-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-amber-300">
-                      Warnings
-                    </p>
-                    <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-amber-100/90">
-                      {job.warnings?.map((warning, index) => (
-                        <li key={`warning-${index}`}>{warning}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {(job.limitations?.length ?? 0) > 0 && completed && (
-                  <div className="rounded-lg border border-gray-600 bg-gray-900/60 p-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">
-                      Known limitations
-                    </p>
-                    <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-gray-400">
-                      {job.limitations?.map((limitation, index) => (
-                        <li key={`limitation-${index}`}>{limitation}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {completed && (
-                  <div className="rounded-lg border border-emerald-500/30 bg-emerald-950/20 p-3 text-xs text-emerald-100">
-                    <p className="font-medium">
-                      {job.room_count ?? 0} room{job.room_count === 1 ? '' : 's'} ·{' '}
-                      {job.furniture_count ?? 0} furniture item
-                      {job.furniture_count === 1 ? '' : 's'} ·{' '}
-                      <span className="capitalize">{job.furnishing_style ?? 'modern'}</span> style ·{' '}
-                      {job.navigation_available ? 'all rooms reachable' : 'partial navigation'}
-                    </p>
-                    {(job.room_types?.length ?? 0) > 0 && (
-                      <p className="mt-1 text-emerald-100/75">
-                        {job.room_types
-                          ?.map((roomType) => roomType.name || `Room ${roomType.room_id + 1}`)
-                          .join(' · ')}
-                      </p>
+                  <div className="flex flex-wrap gap-2.5">
+                    {(failed || partialNavigation) && (
+                      <button
+                        type="button"
+                        onClick={() => handleRetry()}
+                        disabled={retrying}
+                        className="btn btn-secondary btn-sm"
+                      >
+                        {retrying
+                          ? 'Re-queueing…'
+                          : partialNavigation
+                            ? 'Re-run automatic detection'
+                            : 'Retry job (same settings)'}
+                      </button>
                     )}
+                    {!completed && !failed && (
+                      <Link href={`/tour/${job.job_id}`} className="btn btn-secondary btn-sm">
+                        Open status page
+                      </Link>
+                    )}
+                    <a
+                      href={`${RECONSTRUCTION_URL}/reconstructions/${job.job_id}/logs`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="btn btn-ghost btn-sm"
+                    >
+                      Engine logs
+                    </a>
                   </div>
-                )}
-
-                <div className="flex flex-wrap gap-3">
-                  {completed && (
-                    <Link
-                      href={`/tour/${job.job_id}`}
-                      className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500"
-                    >
-                      Open 3D walkthrough
-                    </Link>
-                  )}
-                  {(failed || partialNavigation) && (
-                    <button
-                      type="button"
-                      onClick={() => handleRetry()}
-                      disabled={retrying}
-                      className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-gray-600"
-                    >
-                      {retrying
-                        ? 'Re-queueing...'
-                        : partialNavigation
-                          ? 'Re-run automatic detection'
-                          : 'Retry job (same settings)'}
-                    </button>
-                  )}
-                  {!completed && !failed && (
-                    <Link
-                      href={`/tour/${job.job_id}`}
-                      className="rounded-lg border border-gray-600 px-4 py-2 text-sm font-medium text-gray-200 hover:bg-gray-700"
-                    >
-                      Open status page
-                    </Link>
-                  )}
-                  <a
-                    href={`${RECONSTRUCTION_URL}/reconstructions/${job.job_id}/logs`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded-lg border border-gray-600 px-4 py-2 text-sm font-medium text-gray-200 hover:bg-gray-700"
-                  >
-                    Engine logs
-                  </a>
                 </div>
+              )}
+            </div>
+
+            {!job && (
+              <div className="rounded-[12px] border border-line bg-surface px-5 py-4">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-stone">
+                  What you will receive
+                </p>
+                <p className="mt-1.5 text-[13px] leading-6 text-ink-soft">
+                  A GLB scene, collision map, room graph, furniture manifest, and a validation
+                  report — all tied to the job id shown here once the upload starts.
+                </p>
               </div>
             )}
-          </div>
+          </section>
         </div>
 
         {awaitingRoomTypes && job && (
-          <div id="room-type-review" className="mt-8 scroll-mt-6">
+          <div id="room-type-review" className="mt-8 scroll-mt-24">
             <RoomTypeReview
               key={job.job_id}
               jobId={job.job_id}
@@ -1150,28 +1465,28 @@ export default function CreateTourPage() {
           </div>
         )}
 
-        <div className="mt-8 rounded-lg border border-blue-500/40 bg-blue-950/20 p-6">
-          <h3 className="mb-2 font-semibold text-white">What the pipeline actually does</h3>
-          <ul className="space-y-2 text-sm text-gray-300">
-            <li>1. Validates the uploaded floor plan for readability, size and resolution.</li>
-            <li>
-              2. Vectorises walls, segments enclosed rooms, detects doorway and window openings,
-              and resolves the plan scale.
-            </li>
-            <li>
-              3. Infers room types from geometry and hands uncertain rooms to you for confirmation;
-              rooms you leave unspecified are not furnished at random.
-            </li>
-            <li>
-              4. Builds floors, ceilings, walls with openings, collision boxes and a room graph,
-              then places real 3D furniture with wall anchoring, door clearances and walkable routes.
-            </li>
-            <li>
-              5. Re-opens the GLB and refuses to mark the job complete unless geometry, furniture
-              bounds, collisions and room reachability all validate.
-            </li>
-          </ul>
-        </div>
+        <section className="card mt-8 p-6 sm:p-8">
+          <div className="max-w-2xl">
+            <p className="eyebrow">Transparency</p>
+            <h2 className="mt-2 text-[26px]">What the pipeline actually does</h2>
+          </div>
+          <ol className="mt-6 grid gap-5 sm:grid-cols-2 xl:grid-cols-5">
+            {[
+              'Validates the uploaded floor plan for readability, size, and resolution.',
+              'Vectorises walls, segments enclosed rooms, detects door and window openings, and resolves the plan scale.',
+              'Infers room types from geometry and hands uncertain rooms to you for confirmation; rooms left unspecified are not furnished at random.',
+              'Builds floors, ceilings, walls with openings, collision boxes, and a room graph, then places real 3D furniture with wall anchoring, door clearances, and walkable routes.',
+              'Re-opens the GLB and refuses to mark the job complete unless geometry, furniture bounds, collisions, and room reachability all validate.',
+            ].map((item, index) => (
+              <li key={index} className="border-t border-line pt-3">
+                <p className="font-serif text-[13px] text-bronze">
+                  {String(index + 1).padStart(2, '0')}
+                </p>
+                <p className="mt-1.5 text-[12px] leading-5 text-stone">{item}</p>
+              </li>
+            ))}
+          </ol>
+        </section>
       </main>
     </div>
   )

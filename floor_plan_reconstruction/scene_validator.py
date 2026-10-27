@@ -29,13 +29,19 @@ from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.geometry import box as shapely_box
 from shapely.ops import unary_union
 
-from furnishing import PLAYER_RADIUS, validate_furnishing
+from furnishing import (
+    PLAYER_RADIUS,
+    door_clearance_zones,
+    validate_furnishing,
+)
+from house_model import HARD_MIN_PASSAGE_M, PLAYER_CLEARANCE_M
 
 MIN_FACE_AREA = 1e-7
 MAX_DEGENERATE_RATIO = 0.02
 NAV_GRID_M = 0.1
 APPROACH_M = 0.45
 REGION_MARGIN_M = 0.16
+DOOR_OPENING_PROBE_M = 0.35
 
 REQUIRED_FURNISHED_TYPES = {
     "living_room",
@@ -88,6 +94,7 @@ class SceneValidator:
         checks: Dict[str, bool] = {}
         errors: List[str] = []
         warnings: List[str] = []
+        issues: List[Dict] = []
         stats: Dict = {}
 
         checks["glb_exists"] = glb_path.exists()
@@ -185,10 +192,16 @@ class SceneValidator:
                     errors.append("Spawn point intersects a collision wall")
             doors = collision.get("doors", [])
             stats["doors"] = len(doors)
-            passable = [d for d in doors if float(d.get("width_m", 0)) >= 0.5]
+            passable = [
+                d
+                for d in doors
+                if float(d.get("width_m", 0)) >= HARD_MIN_PASSAGE_M - 0.02
+            ]
             checks["passable_doorways"] = len(passable) > 0 or len(doors) == 0
             if doors and not passable:
-                errors.append("Every detected doorway is too narrow to walk through")
+                errors.append(
+                    "Every detected doorway is narrower than the minimum passable width"
+                )
             for wall in walls:
                 minimum, maximum = wall.get("min"), wall.get("max")
                 if (
@@ -231,6 +244,18 @@ class SceneValidator:
         rooms = self._scene_rooms(floor_plan_result or {}, graph or {})
         doorways = self._scene_doorways(floor_plan_result or {}, collision or {})
         windows = self._scene_windows(floor_plan_result or {})
+        self._check_scene_consistency(
+            rooms,
+            doorways,
+            collision or {},
+            graph or {},
+            floor_plan_result or {},
+            checks,
+            errors,
+            warnings,
+            issues,
+            stats,
+        )
 
         furniture = self._validate_furniture(
             output_dir,
@@ -247,6 +272,7 @@ class SceneValidator:
             errors,
             warnings,
             stats,
+            issues,
         )
 
         navigation = self._validate_navigation(
@@ -258,6 +284,7 @@ class SceneValidator:
             errors,
             warnings,
             stats,
+            issues,
         )
 
         uses_photos = self._uses_photo_workflow(photo_manifest, metadata or {}, graph or {})
@@ -290,14 +317,19 @@ class SceneValidator:
             "collision_file",
             "collision_walls",
             "collision_walls_valid",
+            "collision_doors_current",
+            "doorway_openings_clear",
             "spawn_present",
             "spawn_walkable",
             "room_graph",
             "rooms_present",
+            "rooms_connected",
+            "navigation_graph_current",
             "spawn_clearance",
             "navigation_from_spawn",
             "doorways_reachable",
             "rooms_walkable",
+            "room_navigation_targets",
         ]
         if uses_photos:
             required += [
@@ -322,8 +354,11 @@ class SceneValidator:
                 "furniture_placement_valid",
                 "furniture_glb_nodes",
                 "furniture_collision_match",
+                "furniture_colliders_accurate",
+                "furniture_doorway_clearance",
             ]
 
+        stats["issues"] = issues
         geometry_valid = all(checks.get(name, False) for name in required)
         navigation_available = bool(
             geometry_valid
@@ -339,6 +374,300 @@ class SceneValidator:
             stats,
             geometry_valid,
             navigation_available,
+        )
+
+    # ------------------------------------------------------------------
+    # Structural artifact consistency
+    # ------------------------------------------------------------------
+    def _check_scene_consistency(
+        self,
+        rooms: List[Dict],
+        doorways: List[Dict],
+        collision: Dict,
+        graph: Dict,
+        floor_plan_result: Dict,
+        checks: Dict,
+        errors: List[str],
+        warnings: List[str],
+        issues: List[Dict],
+        stats: Dict,
+    ) -> None:
+        plan_rooms = list(floor_plan_result.get("rooms") or rooms or [])
+        plan_doors = [
+            door
+            for door in (floor_plan_result.get("doorways") or doorways)
+            if door.get("orientation") in ("horizontal", "vertical") and door.get("center_m")
+        ]
+        if not plan_doors:
+            checks["collision_doors_current"] = True
+            checks["doorway_openings_clear"] = True
+        else:
+            expected = {}
+            for door in plan_doors:
+                width = float(
+                    door.get("effective_width_m")
+                    or door.get("width_m")
+                    or 0.9
+                )
+                expected[int(door["id"])] = {
+                    "orientation": door["orientation"],
+                    "position": [
+                        float(door["center_m"][0]),
+                        float(door["center_m"][1]),
+                    ],
+                    "width_m": round(min(1.8, max(HARD_MIN_PASSAGE_M, width)), 2),
+                    "rooms": [
+                        None if value is None else int(value)
+                        for value in (door.get("rooms") or [None, None])[:2]
+                    ],
+                }
+            found = {}
+            for door in collision.get("doors") or []:
+                try:
+                    found[int(door["id"])] = door
+                except (TypeError, ValueError):
+                    continue
+            current = set(found) == set(expected)
+            if current:
+                for door_id, wanted in expected.items():
+                    actual = found[door_id]
+                    if actual.get("orientation") != wanted["orientation"]:
+                        current = False
+                        break
+                    position = actual.get("position") or [0.0, 0.0]
+                    if (
+                        abs(float(position[0]) - wanted["position"][0]) > 0.25
+                        or abs(float(position[1]) - wanted["position"][1]) > 0.25
+                    ):
+                        current = False
+                        break
+                    if abs(float(actual.get("width_m", 0.0)) - wanted["width_m"]) > 0.06:
+                        current = False
+                        break
+                    if (
+                        actual.get("rooms")
+                        and list(actual["rooms"])[:2] != wanted["rooms"]
+                    ):
+                        current = False
+                        break
+            checks["collision_doors_current"] = current
+            if not current:
+                errors.append(
+                    "collision.json doorway openings do not match the current floor plan"
+                )
+                issues.append(
+                    {
+                        "code": "collision_doors_stale",
+                        "message": (
+                            "Collision doorway openings are stale or do not match the "
+                            "normalized plan."
+                        ),
+                    }
+                )
+
+            blockers = []
+            clear_widths: Dict[int, float] = {}
+            for door_id, door in found.items():
+                orientation = door.get("orientation")
+                position = door.get("position") or [0.0, 0.0]
+                width = float(door.get("width_m") or 0.0)
+                if orientation not in ("horizontal", "vertical") or width <= 0:
+                    continue
+                run_axis, line_axis = (0, 1) if orientation == "horizontal" else (1, 0)
+                run_center = float(position[run_axis])
+                line_center = float(position[line_axis])
+                half = width / 2
+                matching = []
+                for wall in collision.get("walls") or []:
+                    if wall.get("window"):
+                        continue
+                    minimum, maximum = wall.get("min") or [0, 0], wall.get("max") or [0, 0]
+                    run_overlap = min(float(maximum[run_axis]), run_center + half) - max(
+                        float(minimum[run_axis]), run_center - half
+                    )
+                    line_distance = 0.0
+                    if line_center < float(minimum[line_axis]):
+                        line_distance = float(minimum[line_axis]) - line_center
+                    elif line_center > float(maximum[line_axis]):
+                        line_distance = line_center - float(maximum[line_axis])
+                    line_span = float(maximum[line_axis]) - float(minimum[line_axis])
+                    # Only walls parallel to the doorway describe the host wall
+                    # thickness. A perpendicular wall's line-axis extent is its
+                    # full run length, which would inflate the probe past the
+                    # trimmed opening band and misreport a clear doorway.
+                    if (
+                        run_overlap > 0.02
+                        and line_distance <= 0.55
+                        and line_span <= 0.6
+                    ):
+                        matching.append(line_span)
+                thickness = max(matching) if matching else 0.12
+                depth = max(0.16, thickness / 2 + 0.1)
+                # The opening is only usable over the part of its run that no
+                # collision volume occupies across the full wall thickness.
+                free = [(run_center - half, run_center + half)]
+                intruders = []
+                for wall in collision.get("walls") or []:
+                    minimum = wall.get("min") or [0, 0]
+                    maximum = wall.get("max") or [0, 0]
+                    line_overlap = min(
+                        float(maximum[line_axis]), line_center + depth
+                    ) - max(float(minimum[line_axis]), line_center - depth)
+                    if line_overlap <= 0.005:
+                        continue
+                    block_low = float(minimum[run_axis])
+                    block_high = float(maximum[run_axis])
+                    if (
+                        min(block_high, run_center + half)
+                        - max(block_low, run_center - half)
+                        <= 0.005
+                    ):
+                        continue
+                    updated = []
+                    for piece_low, piece_high in free:
+                        if block_high <= piece_low or block_low >= piece_high:
+                            updated.append((piece_low, piece_high))
+                            continue
+                        if block_low > piece_low:
+                            updated.append((piece_low, block_low))
+                        if block_high < piece_high:
+                            updated.append((block_high, piece_high))
+                    free = updated
+                    intruders.append(wall)
+                    if not free:
+                        break
+                clear = max((high - low for low, high in free), default=0.0)
+                clear_widths[int(door_id)] = round(clear, 3)
+                if clear + 0.02 < HARD_MIN_PASSAGE_M:
+                    blockers.append(
+                        {
+                            "door_id": door_id,
+                            "clear_width_m": round(clear, 3),
+                            "walls": [
+                                [wall.get("min"), wall.get("max")]
+                                for wall in intruders[:3]
+                            ],
+                        }
+                    )
+            checks["doorway_openings_clear"] = not blockers
+            if blockers:
+                errors.append(
+                    "Wall collision geometry leaves "
+                    f"{len(blockers)} doorway opening(s) below the minimum passable "
+                    "width: "
+                    + ", ".join(
+                        f"{entry['door_id']} ({entry['clear_width_m']:.2f} m)"
+                        for entry in blockers[:5]
+                    )
+                )
+                for entry in blockers:
+                    issues.append(
+                        {
+                            "code": "doorway_blocked_by_wall",
+                            "door_id": entry["door_id"],
+                            "clear_width_m": entry["clear_width_m"],
+                            "message": (
+                                f"Doorway {entry['door_id']} has only "
+                                f"{entry['clear_width_m']:.2f} m of collision-free "
+                                f"width (minimum {HARD_MIN_PASSAGE_M:.2f} m)."
+                            ),
+                        }
+                    )
+            stats["doorway_clear_widths"] = clear_widths
+            stats["doorway_wall_blockers"] = blockers
+
+        if not plan_rooms:
+            checks["navigation_graph_current"] = True
+            return
+        plan_room_ids = {int(room["id"]) for room in plan_rooms}
+        graph_room_ids = {int(node.get("id")) for node in graph.get("nodes") or []}
+        expected_edges = {}
+        adjacency = {room_id: set() for room_id in plan_room_ids}
+        for door in plan_doors:
+            pair = [
+                None if value is None else int(value)
+                for value in (door.get("rooms") or [None, None])[:2]
+            ]
+            if len(pair) < 2 or pair[0] is None or pair[1] is None or pair[0] == pair[1]:
+                continue
+            key = (int(door["id"]), tuple(sorted(pair)))
+            expected_edges[key] = {
+                "position": [float(door["center_m"][0]), float(door["center_m"][1])],
+                "width_m": round(float(door.get("width_m") or 0.9), 2),
+            }
+            adjacency.setdefault(pair[0], set()).add(pair[1])
+            adjacency.setdefault(pair[1], set()).add(pair[0])
+        found_edges = {}
+        for edge in graph.get("edges") or []:
+            try:
+                key = (
+                    int(edge.get("door_id")),
+                    tuple(sorted((int(edge.get("from")), int(edge.get("to"))))),
+                )
+            except (TypeError, ValueError):
+                continue
+            found_edges[key] = edge
+        current = graph_room_ids == plan_room_ids and set(found_edges) == set(
+            expected_edges
+        )
+        if current:
+            for key, wanted in expected_edges.items():
+                edge = found_edges[key]
+                position = edge.get("position") or [0.0, 0.0]
+                if (
+                    abs(float(position[0]) - wanted["position"][0]) > 0.25
+                    or abs(float(position[1]) - wanted["position"][1]) > 0.25
+                    or abs(float(edge.get("width_m", 0.0)) - wanted["width_m"]) > 0.06
+                ):
+                    current = False
+                    break
+        spawn_room = (collision.get("spawn") or {}).get("room_id")
+        if spawn_room is None or int(spawn_room) not in plan_room_ids:
+            current = False
+        else:
+            expected_reachable = {int(spawn_room)}
+            frontier = [int(spawn_room)]
+            while frontier:
+                current_room = frontier.pop()
+                for neighbour in adjacency.get(current_room, ()):
+                    if neighbour not in expected_reachable:
+                        expected_reachable.add(neighbour)
+                        frontier.append(neighbour)
+            if set(int(value) for value in graph.get("reachable_rooms") or []) != (
+                expected_reachable
+            ):
+                current = False
+            if bool(graph.get("connected")) != (len(expected_reachable) == len(plan_room_ids)):
+                current = False
+            if graph.get("spawn_room") is not None and int(graph["spawn_room"]) != int(
+                spawn_room
+            ):
+                current = False
+        checks["navigation_graph_current"] = current
+        if not current:
+            errors.append(
+                "room_graph.json connectivity does not match the current floor plan "
+                "and spawn point"
+            )
+            issues.append(
+                {
+                    "code": "navigation_graph_stale",
+                    "message": (
+                        "The room graph is stale relative to the doorways, rooms or spawn."
+                    ),
+                }
+            )
+
+    @staticmethod
+    def _rect_overlap(first: Dict, second: Dict) -> bool:
+        a_min, a_max = first.get("min") or [0, 0], first.get("max") or [0, 0]
+        b_min, b_max = second.get("min") or [0, 0], second.get("max") or [0, 0]
+        return (
+            min(float(a_max[0]), float(b_max[0])) - max(float(a_min[0]), float(b_min[0]))
+            > 0.005
+            and min(float(a_max[1]), float(b_max[1]))
+            - max(float(a_min[1]), float(b_min[1]))
+            > 0.005
         )
 
     # ------------------------------------------------------------------
@@ -360,6 +689,7 @@ class SceneValidator:
         errors: List[str],
         warnings: List[str],
         stats: Dict,
+        issues: List[Dict],
     ) -> Optional[Dict]:
         path = output_dir / "furniture.json"
         payload = furnishing
@@ -484,6 +814,100 @@ class SceneValidator:
                 "collision.json furniture volumes do not match the placed furniture "
                 "(missing, extra, or altered bounds)"
             )
+            issues.append(
+                {
+                    "code": "furniture_collision_mismatch",
+                    "message": (
+                        "collision.json furniture volumes are stale or do not match the "
+                        "placement records."
+                    ),
+                }
+            )
+
+        colliders_ok = True
+        for item in items:
+            if not item.get("collision"):
+                continue
+            footprint = item.get("footprint")
+            bounds = item.get("collision_bounds")
+            if not footprint or not bounds:
+                colliders_ok = False
+                issues.append(
+                    {
+                        "code": "furniture_collider_missing",
+                        "item_id": item.get("id"),
+                        "room_id": item.get("room_id"),
+                        "message": f"{item.get('id')} has collision enabled but no collider bounds.",
+                    }
+                )
+                continue
+            if any(
+                abs(float(a) - float(b)) > 0.02
+                for a, b in zip(
+                    list(bounds.get("min") or []) + list(bounds.get("max") or []),
+                    list(footprint.get("min") or []) + list(footprint.get("max") or []),
+                )
+            ):
+                colliders_ok = False
+                issues.append(
+                    {
+                        "code": "furniture_collider_inflated",
+                        "item_id": item.get("id"),
+                        "room_id": item.get("room_id"),
+                        "message": (
+                            f"{item.get('id')} collider does not match its footprint "
+                            "(oversized or displaced)."
+                        ),
+                    }
+                )
+        checks["furniture_colliders_accurate"] = colliders_ok
+        if not colliders_ok:
+            errors.append(
+                "Furniture collision volumes do not match the item footprints "
+                "(oversized or displaced colliders)"
+            )
+
+        zones = door_clearance_zones(doorways)
+        door_rooms = {
+            door.get("id"): {
+                int(room) for room in (door.get("rooms") or []) if room is not None
+            }
+            for door in doorways
+        }
+        clearance_ok = True
+        for entry in collision.get("furniture") or []:
+            minimum = entry.get("min") or [0.0, 0.0]
+            maximum = entry.get("max") or [0.0, 0.0]
+            box = {"min": minimum, "max": maximum}
+            for zone in zones:
+                adjacent = door_rooms.get(zone.get("door_id"))
+                entry_room = entry.get("room_id")
+                # A clearance rectangle crosses the wall band; only furniture
+                # in a room the doorway actually connects can obstruct it.
+                if (
+                    adjacent
+                    and entry_room is not None
+                    and int(entry_room) not in adjacent
+                ):
+                    continue
+                if self._rect_overlap(box, zone):
+                    clearance_ok = False
+                    issues.append(
+                        {
+                            "code": "furniture_in_doorway",
+                            "item_id": entry.get("item_id"),
+                            "door_id": zone.get("door_id"),
+                            "room_id": entry.get("room_id"),
+                            "message": (
+                                f"{entry.get('item_id')} occupies the clearance of doorway "
+                                f"{zone.get('door_id')}."
+                            ),
+                        }
+                    )
+                    break
+        checks["furniture_doorway_clearance"] = clearance_ok
+        if not clearance_ok:
+            errors.append("Furniture blocks a doorway clearance zone")
 
         stats["furniture"] = {
             "style": payload.get("style"),
@@ -564,6 +988,7 @@ class SceneValidator:
         errors: List[str],
         warnings: List[str],
         stats: Dict,
+        issues: List[Dict],
     ) -> Dict:
         walls = list(collision.get("walls") or [])
         doors = list(collision.get("doors") or [])
@@ -581,7 +1006,14 @@ class SceneValidator:
             checks["navigation_from_spawn"] = False
             checks["doorways_reachable"] = False
             checks["rooms_walkable"] = False
+            checks["room_navigation_targets"] = False
             errors.append("Spawn point or collision walls are missing; navigation cannot be verified")
+            issues.append(
+                {
+                    "code": "spawn_missing",
+                    "message": "Spawn point or collision walls are missing.",
+                }
+            )
             return {"all_connected_rooms_reachable": False}
 
         x, _, z = spawn
@@ -591,12 +1023,20 @@ class SceneValidator:
         checks["spawn_clearance"] = not spawn_blocked
         if spawn_blocked:
             errors.append("Spawn point is inside a wall or piece of furniture")
+            issues.append(
+                {
+                    "code": "spawn_invalid",
+                    "position": [float(x), float(z)],
+                    "message": "Spawn point is inside a wall or piece of furniture.",
+                }
+            )
 
         grid = self._build_navigation_grid(walls, furniture_boxes, polygons, doors)
         if grid is None:
             checks["navigation_from_spawn"] = False
             checks["doorways_reachable"] = False
             checks["rooms_walkable"] = False
+            checks["room_navigation_targets"] = False
             errors.append("Navigation grid could not be built for this floor plan")
             return {"all_connected_rooms_reachable": False}
 
@@ -606,7 +1046,15 @@ class SceneValidator:
             checks["navigation_from_spawn"] = False
             checks["doorways_reachable"] = False
             checks["rooms_walkable"] = False
+            checks["room_navigation_targets"] = False
             errors.append("Spawn point has no walkable space around it")
+            issues.append(
+                {
+                    "code": "spawn_invalid",
+                    "position": [float(x), float(z)],
+                    "message": "Spawn point has no walkable space around it.",
+                }
+            )
             return {"all_connected_rooms_reachable": False}
 
         visited = np.zeros(free.shape, dtype=bool)
@@ -639,6 +1087,41 @@ class SceneValidator:
             }
 
         connected_ids = self._connected_room_ids(graph, set(polygons))
+        wall_free_cache: List[np.ndarray] = []
+
+        def wall_clear_grid() -> np.ndarray:
+            if not wall_free_cache:
+                region = self._navigation_region(walls, furniture_boxes, polygons, doors)
+                wall_free_cache.append(
+                    self._free_cells(xs, zs, region, walls, [])
+                    if region is not None
+                    else np.zeros(free.shape, dtype=bool)
+                )
+            return wall_free_cache[0]
+
+        obstructions: Dict[str, Dict] = {}
+        room_blockers: Dict[int, List[str]] = {}
+
+        def attribute(target_id: str, room_id: int, target) -> List[str]:
+            if not furniture_boxes:
+                return []
+            blockers = self._route_obstructions(
+                xs,
+                zs,
+                wall_clear_grid(),
+                free,
+                furniture_boxes,
+                (x, z),
+                target,
+            )
+            obstructions[target_id] = {
+                "room_id": room_id,
+                "cause": "furniture" if blockers else "structure",
+                "item_ids": blockers,
+            }
+            room_blockers.setdefault(room_id, blockers)
+            return blockers
+
         unreachable_rooms = []
         for room_id in sorted(connected_ids):
             info = room_stats.get(str(room_id))
@@ -646,9 +1129,27 @@ class SceneValidator:
                 continue
             if info["reachable_cells"] == 0:
                 unreachable_rooms.append(room_id)
+                polygon = polygons.get(room_id)
+                blockers = (
+                    attribute(f"room:{room_id}", room_id, polygon)
+                    if polygon is not None
+                    else []
+                )
                 errors.append(
                     f"Room {room_id} cannot be reached from the spawn point; furniture or "
                     "wall geometry blocks every route."
+                )
+                issues.append(
+                    {
+                        "code": "room_unreachable",
+                        "room_id": room_id,
+                        "item_ids": blockers,
+                        "cause": "furniture" if blockers else "structure",
+                        "message": (
+                            f"Room {room_id} has no path from the spawn point; furniture or "
+                            "wall geometry blocks every route."
+                        ),
+                    }
                 )
         for room_id, polygon in polygons.items():
             if room_id not in connected_ids and room_stats[str(room_id)]["reachable_cells"] == 0:
@@ -657,6 +1158,51 @@ class SceneValidator:
                 )
         checks["rooms_walkable"] = not unreachable_rooms
         checks["all_connected_rooms_reachable"] = not unreachable_rooms
+
+        room_targets: Dict[str, Dict] = {}
+        target_failures = []
+        for room_id, polygon in polygons.items():
+            inside = contains_xy(polygon, grid_x, grid_z)
+            target = polygon.representative_point()
+            # Furniture may cover the geometric centre of a room without
+            # blocking the room: pick the reachable free cell closest to it.
+            candidates = np.argwhere(free & inside & visited)
+            reachable = bool(candidates.size)
+            if reachable:
+                rows, cols = candidates[:, 0], candidates[:, 1]
+            else:
+                fallback = np.argwhere(free & inside)
+                if fallback.size:
+                    rows, cols = fallback[:, 0], fallback[:, 1]
+                else:
+                    rows = cols = None
+            point = None
+            if rows is not None:
+                distances = (xs[cols] - target.x) ** 2 + (zs[rows] - target.y) ** 2
+                best = int(np.argmin(distances))
+                point = [
+                    round(float(xs[int(cols[best])]), 3),
+                    round(float(zs[int(rows[best])]), 3),
+                ]
+            room_targets[str(room_id)] = {
+                "point": point,
+                "reachable": reachable,
+            }
+            if room_id in connected_ids and not reachable:
+                target_failures.append(room_id)
+                issues.append(
+                    {
+                        "code": "room_navigation_target_unreachable",
+                        "room_id": room_id,
+                        "item_ids": room_blockers.get(room_id, []),
+                        "message": (
+                            f"Room {room_id} has no reachable navigable target point from "
+                            "the spawn."
+                        ),
+                    }
+                )
+        checks["room_navigation_targets"] = not target_failures
+        stats["room_targets"] = room_targets
 
         door_results: Dict[str, Dict] = {}
         unreachable_doors = []
@@ -667,7 +1213,16 @@ class SceneValidator:
             results = []
             for room_id, point in approach_points:
                 index = self._nearest_free(free, xs, zs, point, max_distance=0.4)
-                reachable = bool(index is not None and visited[index])
+                same_room = bool(
+                    index is not None
+                    and room_id in polygons
+                    and contains_xy(
+                        polygons[room_id].buffer(REGION_MARGIN_M + 0.08),
+                        np.array([xs[index[1]]]),
+                        np.array([zs[index[0]]]),
+                    )[0]
+                )
+                reachable = bool(index is not None and same_room and visited[index])
                 results.append(
                     {
                         "room_id": room_id,
@@ -675,14 +1230,52 @@ class SceneValidator:
                         "reachable": reachable,
                     }
                 )
-                if index is None:
+                if index is None or not same_room:
                     errors.append(
                         f"Doorway {door.get('id')} has no walkable space on the room {room_id} side."
+                    )
+                    blockers = room_blockers.get(room_id)
+                    if blockers is None:
+                        blockers = attribute(
+                            f"door:{door.get('id')}:room:{room_id}",
+                            room_id,
+                            ShapelyPoint(point[0], point[1]).buffer(0.25),
+                        )
+                    issues.append(
+                        {
+                            "code": "doorway_side_no_space",
+                            "door_id": door.get("id"),
+                            "room_id": room_id,
+                            "item_ids": blockers,
+                            "message": (
+                                f"Doorway {door.get('id')} has no walkable space on the room "
+                                f"{room_id} side."
+                            ),
+                        }
                     )
                 elif not reachable:
                     errors.append(
                         f"Doorway {door.get('id')} cannot be reached from the spawn point on the "
                         f"room {room_id} side."
+                    )
+                    blockers = room_blockers.get(room_id)
+                    if blockers is None:
+                        blockers = attribute(
+                            f"door:{door.get('id')}:room:{room_id}",
+                            room_id,
+                            ShapelyPoint(point[0], point[1]).buffer(0.25),
+                        )
+                    issues.append(
+                        {
+                            "code": "doorway_side_unreachable",
+                            "door_id": door.get("id"),
+                            "room_id": room_id,
+                            "item_ids": blockers,
+                            "message": (
+                                f"Doorway {door.get('id')} cannot be reached from the spawn "
+                                f"point on the room {room_id} side."
+                            ),
+                        }
                     )
             door_results[str(door.get("id"))] = {"sides": results}
             if any(not side["reachable"] for side in results):
@@ -702,14 +1295,54 @@ class SceneValidator:
             "connected_rooms": sorted(connected_ids),
             "unreachable_rooms": unreachable_rooms,
             "unreachable_doors": unreachable_doors,
+            "obstructions": obstructions,
         }
         return {
             "all_connected_rooms_reachable": checks["rooms_walkable"]
-            and checks["doorways_reachable"],
+            and checks["doorways_reachable"]
+            and checks["room_navigation_targets"],
             "grid": grid,
             "reachable": visited,
             "rooms": room_stats,
         }
+
+    def _navigation_region(
+        self,
+        walls: List[Dict],
+        furniture: List[Dict],
+        polygons: Dict[int, ShapelyPolygon],
+        doors: Optional[List[Dict]] = None,
+    ) -> Optional[ShapelyPolygon]:
+        if polygons:
+            walkable_regions = [polygon.buffer(REGION_MARGIN_M) for polygon in polygons.values()]
+            walkable_regions.extend(self._door_connector_patches(doors or []))
+            return unary_union(walkable_regions)
+        all_boxes = walls + furniture
+        if not all_boxes:
+            return None
+        min_x = min(float(entry["min"][0]) for entry in all_boxes) - 0.5
+        min_z = min(float(entry["min"][1]) for entry in all_boxes) - 0.5
+        max_x = max(float(entry["max"][0]) for entry in all_boxes) + 0.5
+        max_z = max(float(entry["max"][1]) for entry in all_boxes) + 0.5
+        from shapely.geometry import box as shapely_box
+
+        return shapely_box(min_x, min_z, max_x, max_z)
+
+    def _free_cells(
+        self,
+        xs: np.ndarray,
+        zs: np.ndarray,
+        region: ShapelyPolygon,
+        walls: List[Dict],
+        furniture: List[Dict],
+    ) -> np.ndarray:
+        grid_x, grid_z = np.meshgrid(xs, zs)
+        free = contains_xy(region, grid_x, grid_z)
+        for entry in walls:
+            free &= ~self._box_mask(grid_x, grid_z, entry, PLAYER_RADIUS)
+        for entry in furniture:
+            free &= ~self._box_mask(grid_x, grid_z, entry, PLAYER_RADIUS)
+        return free
 
     def _build_navigation_grid(
         self,
@@ -718,22 +1351,9 @@ class SceneValidator:
         polygons: Dict[int, ShapelyPolygon],
         doors: Optional[List[Dict]] = None,
     ):
-        if polygons:
-            walkable_regions = [polygon.buffer(REGION_MARGIN_M) for polygon in polygons.values()]
-            walkable_regions.extend(self._door_connector_patches(doors or []))
-            region = unary_union(walkable_regions)
-        else:
-            all_boxes = walls + furniture
-            if not all_boxes:
-                return None
-            min_x = min(float(entry["min"][0]) for entry in all_boxes) - 0.5
-            min_z = min(float(entry["min"][1]) for entry in all_boxes) - 0.5
-            max_x = max(float(entry["max"][0]) for entry in all_boxes) + 0.5
-            max_z = max(float(entry["max"][1]) for entry in all_boxes) + 0.5
-            from shapely.geometry import box as shapely_box
-
-            region = shapely_box(min_x, min_z, max_x, max_z)
-
+        region = self._navigation_region(walls, furniture, polygons, doors)
+        if region is None:
+            return None
         min_x, min_z, max_x, max_z = region.bounds
         if not all(np.isfinite([min_x, min_z, max_x, max_z])):
             return None
@@ -741,13 +1361,94 @@ class SceneValidator:
         zs = np.arange(min_z + NAV_GRID_M / 2, max_z, NAV_GRID_M)
         if xs.size == 0 or zs.size == 0 or xs.size * zs.size > 2_500_000:
             return None
-        grid_x, grid_z = np.meshgrid(xs, zs)
-        free = contains_xy(region, grid_x, grid_z)
-        for entry in walls:
-            free &= ~self._box_mask(grid_x, grid_z, entry, PLAYER_RADIUS)
-        for entry in furniture:
-            free &= ~self._box_mask(grid_x, grid_z, entry, PLAYER_RADIUS)
+        free = self._free_cells(xs, zs, region, walls, furniture)
         return xs, zs, free
+
+    def _route_obstructions(
+        self,
+        xs: np.ndarray,
+        zs: np.ndarray,
+        wall_free: np.ndarray,
+        free: np.ndarray,
+        furniture: List[Dict],
+        spawn: Sequence[float],
+        target: ShapelyPolygon,
+    ) -> List[str]:
+        """Name the furniture items standing on the only wall-clear route.
+
+        Walls alone may leave a valid corridor to the target while furniture
+        closes it.  Walking that corridor and recording which colliders cover
+        it identifies the actual obstruction instead of blaming a whole room.
+        An empty result means the failure is structural, not furniture.
+        """
+        if not furniture:
+            return []
+        start = self._nearest_free(wall_free, xs, zs, spawn, max_distance=0.6)
+        if start is None:
+            return []
+        goal_x, goal_z = target.representative_point().x, target.representative_point().y
+        grid_x, grid_z = np.meshgrid(xs, zs)
+        inside = np.argwhere(wall_free & contains_xy(target, grid_x, grid_z))
+        if not inside.size:
+            return []
+        rows, cols = inside[:, 0], inside[:, 1]
+        distances = (xs[cols] - goal_x) ** 2 + (zs[rows] - goal_z) ** 2
+        goal = (int(rows[int(np.argmin(distances))]), int(cols[int(np.argmin(distances))]))
+        path = self._shortest_path(wall_free, start, goal)
+        if not path:
+            return []
+        blockers: Dict[str, int] = {}
+        for row, col in path:
+            if free[row, col]:
+                continue
+            x, z = float(xs[col]), float(zs[row])
+            for entry in furniture:
+                minimum = entry.get("min") or [0.0, 0.0]
+                maximum = entry.get("max") or [0.0, 0.0]
+                if (
+                    float(minimum[0]) - PLAYER_RADIUS - 1e-6
+                    <= x
+                    <= float(maximum[0]) + PLAYER_RADIUS + 1e-6
+                    and float(minimum[1]) - PLAYER_RADIUS - 1e-6
+                    <= z
+                    <= float(maximum[1]) + PLAYER_RADIUS + 1e-6
+                ):
+                    item_id = str(entry.get("item_id"))
+                    blockers[item_id] = blockers.get(item_id, 0) + 1
+        return [
+            item_id
+            for item_id, _ in sorted(blockers.items(), key=lambda pair: (-pair[1], pair[0]))
+        ]
+
+    @staticmethod
+    def _shortest_path(
+        free: np.ndarray, start: Tuple[int, int], goal: Tuple[int, int]
+    ) -> Optional[List[Tuple[int, int]]]:
+        if not free[start] or not free[goal]:
+            return None
+        parents: Dict[Tuple[int, int], Optional[Tuple[int, int]]] = {start: None}
+        queue = deque([start])
+        while queue:
+            row, col = queue.popleft()
+            if (row, col) == goal:
+                path = []
+                cursor: Optional[Tuple[int, int]] = goal
+                while cursor is not None:
+                    path.append(cursor)
+                    cursor = parents[cursor]
+                path.reverse()
+                return path
+            for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                neighbour = (row + dr, col + dc)
+                if (
+                    0 <= neighbour[0] < free.shape[0]
+                    and 0 <= neighbour[1] < free.shape[1]
+                    and free[neighbour]
+                    and neighbour not in parents
+                ):
+                    parents[neighbour] = (row, col)
+                    queue.append(neighbour)
+        return None
 
     @staticmethod
     def _door_connector_patches(doors: List[Dict]) -> List[ShapelyPolygon]:
@@ -823,25 +1524,33 @@ class SceneValidator:
         center = door.get("position") or door.get("center_m") or [0.0, 0.0]
         orientation = str(door.get("orientation") or "horizontal")
         if orientation == "horizontal":
-            offsets = ((0.0, APPROACH_M), (0.0, -APPROACH_M))
+            offsets = ((0.0, 1.0), (0.0, -1.0))
         else:
-            offsets = ((APPROACH_M, 0.0), (-APPROACH_M, 0.0))
+            offsets = ((1.0, 0.0), (-1.0, 0.0))
         adjacent = [int(room) for room in (door.get("rooms") or []) if room is not None]
         points: List[Tuple[int, Tuple[float, float]]] = []
+        seen = set()
         for room_id in adjacent:
+            if room_id in seen:
+                continue
+            seen.add(room_id)
             polygon = polygons.get(room_id)
             picked = None
-            for distance in (APPROACH_M, 0.35, 0.25):
-                for dx, dz in offsets:
-                    scale = distance / APPROACH_M
-                    point = (float(center[0]) + dx * scale, float(center[1]) + dz * scale)
-                    if polygon is None or polygon.buffer(0.05).covers(
-                        ShapelyPoint(point[0], point[1])
-                    ):
-                        picked = point
+            if polygon is not None:
+                interior = polygon.buffer(-0.02)
+                if interior.is_empty:
+                    interior = polygon
+                for distance in (APPROACH_M, 0.35, 0.25):
+                    for dx, dz in offsets:
+                        point = (
+                            float(center[0]) + dx * distance,
+                            float(center[1]) + dz * distance,
+                        )
+                        if interior.covers(ShapelyPoint(point[0], point[1])):
+                            picked = point
+                            break
+                    if picked:
                         break
-                if picked:
-                    break
             if picked:
                 points.append((room_id, picked))
         return points

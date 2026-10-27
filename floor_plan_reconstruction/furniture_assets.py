@@ -7,19 +7,22 @@ for every generated property. No external or unlicensed models are required.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import trimesh
+from shapely.geometry import box as shapely_box
 from trimesh.visual.material import PBRMaterial
 
-STYLES = ("modern", "minimalist", "scandinavian")
+STYLES = ("modern", "minimalist", "scandinavian", "warm_luxury")
 STYLE_LABELS = {
-    "modern": "Modern",
+    "modern": "Modern Contemporary",
     "minimalist": "Minimalist",
     "scandinavian": "Scandinavian",
+    "warm_luxury": "Warm Luxury",
 }
 
 # Semantic material palettes. Colours are sRGB hex values; the exporter
@@ -34,6 +37,7 @@ PALETTES: Dict[str, Dict[str, str]] = {
         "fabric_dark": "#3d444c",
         "bedding": "#dedbd3",
         "cushion": "#b7a98f",
+        "rug": "#9a9186",
         "metal": "#9aa0a5",
         "metal_dark": "#4b4f53",
         "glass": "#a9c4d2",
@@ -58,6 +62,7 @@ PALETTES: Dict[str, Dict[str, str]] = {
         "fabric_dark": "#b9b3a8",
         "bedding": "#f0eee8",
         "cushion": "#c9c2b4",
+        "rug": "#d6cfc2",
         "metal": "#b7b7b2",
         "metal_dark": "#777772",
         "glass": "#c6d8df",
@@ -82,6 +87,7 @@ PALETTES: Dict[str, Dict[str, str]] = {
         "fabric_dark": "#b9c0b6",
         "bedding": "#f3efe6",
         "cushion": "#c7b18e",
+        "rug": "#ded6c6",
         "metal": "#a3aaa8",
         "metal_dark": "#5c6361",
         "glass": "#c3d8dd",
@@ -96,6 +102,31 @@ PALETTES: Dict[str, Dict[str, str]] = {
         "art": "#8ea79a",
         "accent": "#9fb3a3",
         "light": "#fbf0d8",
+    },
+    "warm_luxury": {
+        "wood": "#6b4a2f",
+        "wood_light": "#8d6a45",
+        "wood_dark": "#3f2f20",
+        "fabric": "#5c5f55",
+        "fabric_light": "#cfc3ae",
+        "fabric_dark": "#3b4038",
+        "bedding": "#efe7d6",
+        "cushion": "#b78d5d",
+        "rug": "#a8967c",
+        "metal": "#c0a061",
+        "metal_dark": "#836a3d",
+        "glass": "#b8cfd1",
+        "ceramic": "#efece3",
+        "stone": "#7b7468",
+        "counter": "#2e3732",
+        "cabinet": "#33423a",
+        "appliance": "#cfccc4",
+        "plant": "#3c6247",
+        "soil": "#43342a",
+        "screen": "#0c1113",
+        "art": "#7c5a3a",
+        "accent": "#9a6b3f",
+        "light": "#ffe2b0",
     },
 }
 
@@ -128,6 +159,34 @@ class AssetSpec:
     description: str = ""
 
 
+def _rounded_box_mesh(
+    size: Tuple[float, float, float], radius: float = 0.01, segments: int = 4
+) -> trimesh.Trimesh:
+    """Box with rounded vertical edges.
+
+    Real upholstery, casegoods and tabletops have a small edge radius; an
+    unbroken cube reads as a rendering placeholder. The rounded outline is
+    extruded to the exact requested height, so dimensions stay unchanged.
+    """
+    width, height, depth = size
+    limit = min(width, depth) * 0.24
+    radius = min(radius, limit)
+    if radius <= 0.002 or min(size) < 0.03:
+        return trimesh.creation.box(extents=size)
+    outline = shapely_box(-width / 2, -depth / 2, width / 2, depth / 2)
+    try:
+        outline = outline.buffer(-radius, resolution=segments, join_style=1)
+        outline = outline.buffer(radius, resolution=segments, join_style=1)
+        if outline.is_empty:
+            return trimesh.creation.box(extents=size)
+        mesh = trimesh.creation.extrude_polygon(outline, height=height)
+    except Exception:
+        return trimesh.creation.box(extents=size)
+    mesh.apply_transform(trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0]))
+    mesh.apply_translation([0.0, height / 2, 0.0])
+    return mesh
+
+
 def _box(
     parts: List[Part],
     name: str,
@@ -135,7 +194,7 @@ def _box(
     size: Tuple[float, float, float],
     center: Tuple[float, float, float],
 ) -> None:
-    mesh = trimesh.creation.box(extents=size)
+    mesh = _rounded_box_mesh(size)
     mesh.apply_translation(center)
     parts.append(Part(name=name, mesh=mesh, material=material))
 
@@ -171,6 +230,74 @@ def _ellipsoid(
 ) -> None:
     mesh = trimesh.creation.icosphere(subdivisions=subdivisions, radius=1.0)
     mesh.apply_scale([size[0] / 2, size[1] / 2, size[2] / 2])
+    mesh.apply_translation(center)
+    parts.append(Part(name=name, mesh=mesh, material=material))
+
+
+def _superellipsoid_mesh(
+    size: Tuple[float, float, float],
+    exponent: float = 0.4,
+    rings: int = 7,
+    segments: int = 18,
+) -> trimesh.Trimesh:
+    """Cushion form: flat faces with genuinely rounded edges.
+
+    A bevelled cube still reads as a box from every angle. A superellipsoid
+    keeps the authored outer dimensions but curves the top, sides and corners
+    the way foam and filling do.
+    """
+    half = [max(dimension, 0.002) / 2.0 for dimension in size]
+
+    def signed_power(value: float, power: float) -> float:
+        return math.copysign(abs(value) ** power, value)
+
+    vertices: List[List[float]] = [[0.0, -half[1], 0.0]]
+    for ring in range(1, rings):
+        v = -math.pi / 2 + math.pi * ring / rings
+        cv = signed_power(math.cos(v), exponent)
+        sv = signed_power(math.sin(v), exponent)
+        for segment in range(segments):
+            u = -math.pi + 2 * math.pi * segment / segments
+            vertices.append(
+                [
+                    half[0] * cv * signed_power(math.cos(u), exponent),
+                    half[1] * sv,
+                    half[2] * cv * signed_power(math.sin(u), exponent),
+                ]
+            )
+    top = len(vertices)
+    vertices.append([0.0, half[1], 0.0])
+
+    faces: List[List[int]] = []
+    for segment in range(segments):
+        following = (segment + 1) % segments
+        faces.append([0, 1 + following, 1 + segment])
+        for ring in range(rings - 2):
+            row = 1 + ring * segments
+            next_row = row + segments
+            faces.append([row + segment, row + following, next_row + following])
+            faces.append([row + segment, next_row + following, next_row + segment])
+        last = 1 + (rings - 2) * segments
+        faces.append([last + segment, top, last + following])
+
+    mesh = trimesh.Trimesh(
+        vertices=np.asarray(vertices, dtype=np.float64),
+        faces=np.asarray(faces, dtype=np.int64),
+        process=True,
+    )
+    mesh.fix_normals()
+    return mesh
+
+
+def _cushion(
+    parts: List[Part],
+    name: str,
+    material: str,
+    size: Tuple[float, float, float],
+    center: Tuple[float, float, float],
+    exponent: float = 0.4,
+) -> None:
+    mesh = _superellipsoid_mesh(size, exponent)
     mesh.apply_translation(center)
     parts.append(Part(name=name, mesh=mesh, material=material))
 
@@ -216,19 +343,28 @@ def _build_sofa(style: str) -> List[Part]:
             (side * (width / 2 - 0.085), 0.47, 0),
         )
     for index, offset in enumerate((-0.53, 0.53)):
-        _ellipsoid(
+        _cushion(
             parts,
             f"seat_cushion_{index}",
             "fabric_light",
-            (1.0, 0.2, 0.72),
-            (offset, 0.45, 0.05),
+            (0.96, 0.18, 0.74),
+            (offset, 0.43, 0.05),
         )
-        _ellipsoid(
+        _cushion(
             parts,
             f"back_cushion_{index}",
+            "fabric_light",
+            (0.94, 0.4, 0.18),
+            (offset, 0.65, -depth / 2 + 0.2),
+        )
+    for index, offset in enumerate((-0.68, 0.68)):
+        _cushion(
+            parts,
+            f"throw_pillow_{index}",
             "cushion",
-            (0.92, 0.42, 0.18),
-            (offset, 0.67, -depth / 2 + 0.2),
+            (0.34, 0.3, 0.14),
+            (offset, 0.6, -0.18),
+            exponent=0.5,
         )
     _box(parts, "plinth", "wood_dark", (width - 0.2, 0.06, depth - 0.2), (0, 0.15, 0))
     return parts
@@ -244,21 +380,30 @@ def _build_sectional(style: str) -> List[Part]:
     _box(parts, "arm_left", "fabric_dark", (0.17, 0.46, 0.95), (-1.37, 0.47, -0.4))
     _box(parts, "arm_right", "fabric_dark", (0.17, 0.46, 0.95), (0.72, 0.47, -0.4))
     for index, offset in enumerate((-0.85, -0.35)):
-        _ellipsoid(
+        _cushion(
             parts,
             f"seat_cushion_{index}",
             "fabric_light",
-            (0.98, 0.2, 0.72),
-            (offset, 0.45, -0.35),
+            (0.96, 0.18, 0.74),
+            (offset, 0.43, -0.35),
         )
-        _ellipsoid(
+        _cushion(
             parts,
             f"back_cushion_{index}",
-            "cushion",
-            (0.9, 0.42, 0.18),
-            (offset, 0.67, -0.62),
+            "fabric_light",
+            (0.9, 0.4, 0.18),
+            (offset, 0.65, -0.62),
         )
-    _ellipsoid(parts, "chaise_cushion", "fabric_light", (0.72, 0.2, 1.5), (0.98, 0.45, 0.05))
+    _cushion(parts, "chaise_cushion", "fabric_light", (0.72, 0.18, 1.5), (0.98, 0.43, 0.05))
+    for index, offset in enumerate((-0.98, -0.62)):
+        _cushion(
+            parts,
+            f"throw_pillow_{index}",
+            "cushion",
+            (0.32, 0.29, 0.14),
+            (offset, 0.6, -0.52),
+            exponent=0.5,
+        )
     _box(parts, "plinth", "wood_dark", (2.0, 0.06, 0.75), (-0.35, 0.15, -0.4))
     return parts
 
@@ -277,8 +422,16 @@ def _build_armchair(style: str) -> List[Part]:
             (0.12, 0.4, depth),
             (side * (width / 2 - 0.06), 0.49, 0),
         )
-    _ellipsoid(parts, "seat_cushion", "fabric_light", (0.62, 0.18, 0.62), (0, 0.45, 0.07))
-    _ellipsoid(parts, "back_cushion", "cushion", (0.6, 0.38, 0.16), (0, 0.66, -0.22))
+    _cushion(parts, "seat_cushion", "fabric_light", (0.62, 0.17, 0.62), (0, 0.42, 0.07))
+    _cushion(parts, "back_cushion", "fabric_light", (0.6, 0.36, 0.16), (0, 0.63, -0.22))
+    _cushion(
+        parts,
+        "throw_pillow",
+        "cushion",
+        (0.3, 0.27, 0.13),
+        (0.16, 0.58, -0.16),
+        exponent=0.5,
+    )
     return parts
 
 
@@ -318,8 +471,10 @@ def _build_television(style: str) -> List[Part]:
 
 def _build_rug(style: str) -> List[Part]:
     parts: List[Part] = []
-    _box(parts, "rug", "cushion", (2.6, 0.018, 1.7), (0, 0.012, 0))
-    _box(parts, "inner", "fabric_light", (2.42, 0.004, 1.52), (0, 0.023, 0))
+    _box(parts, "rug", "rug", (2.6, 0.016, 1.7), (0, 0.008, 0))
+    for side in (-1, 1):
+        _box(parts, f"border_x_{side}", "cushion", (0.055, 0.004, 1.7), (side * 1.27, 0.018, 0))
+        _box(parts, f"border_z_{side}", "cushion", (2.6, 0.004, 0.055), (0, 0.018, side * 0.82))
     return parts
 
 
@@ -351,21 +506,43 @@ def _build_bed(width: float, depth: float = 2.05):
         parts: List[Part] = []
         _legs(parts, "wood_dark", width, depth, 0.12, inset=0.1, radius=0.03)
         _box(parts, "frame", "wood", (width, 0.28, depth), (0, 0.26, 0))
-        _box(parts, "mattress", "bedding", (width - 0.08, 0.22, depth - 0.1), (0, 0.51, 0.02))
-        _box(parts, "duvet", "fabric_light", (width - 0.02, 0.12, depth * 0.62), (0, 0.64, 0.3))
+        _cushion(parts, "mattress", "bedding", (width - 0.08, 0.22, depth - 0.1), (0, 0.51, 0.02), exponent=0.3)
+        _cushion(
+            parts,
+            "duvet",
+            "fabric_light",
+            (width - 0.02, 0.14, depth * 0.62),
+            (0, 0.64, 0.3),
+            exponent=0.28,
+        )
         if width >= 1.4:
             for index, offset in enumerate((-width / 4, width / 4)):
-                _ellipsoid(
+                _cushion(
                     parts,
                     f"pillow_{index}",
                     "bedding",
-                    (0.55, 0.14, 0.36),
+                    (0.55, 0.16, 0.36),
                     (offset, 0.7, -depth / 2 + 0.35),
+                    exponent=0.5,
                 )
         else:
-            _ellipsoid(parts, "pillow_0", "bedding", (0.6, 0.14, 0.36), (0, 0.7, -depth / 2 + 0.35))
+            _cushion(
+                parts,
+                "pillow_0",
+                "bedding",
+                (0.6, 0.16, 0.36),
+                (0, 0.7, -depth / 2 + 0.35),
+                exponent=0.5,
+            )
         _box(parts, "headboard", "fabric", (width + 0.08, 0.95, 0.09), (0, 0.62, -depth / 2 - 0.01))
-        _box(parts, "throw", "accent", (width - 0.04, 0.05, 0.42), (0, 0.72, depth / 2 - 0.55))
+        _cushion(
+            parts,
+            "throw",
+            "cushion",
+            (width - 0.06, 0.09, 0.44),
+            (0, 0.72, depth / 2 - 0.55),
+            exponent=0.35,
+        )
         return parts
 
     return builder
@@ -729,7 +906,8 @@ def _build_balcony_table(style: str) -> List[Part]:
 def _build_art_frame(style: str) -> List[Part]:
     parts: List[Part] = []
     _box(parts, "frame", "wood_dark", (0.64, 0.48, 0.03), (0, 0, 0))
-    _box(parts, "canvas", "art", (0.56, 0.4, 0.01), (0, 0, 0.021))
+    _box(parts, "mat", "ceramic", (0.58, 0.42, 0.012), (0, 0, 0.02))
+    _box(parts, "canvas", "art", (0.46, 0.31, 0.006), (0, 0, 0.029))
     return parts
 
 
@@ -898,50 +1076,66 @@ def material_config(style: str) -> Dict[str, Dict[str, object]]:
     palette = material_palette(style)
     config = {}
     for key, color in palette.items():
-        alpha = 0.32 if key == "glass" else 1.0
+        alpha, metallic, roughness = _material_finish(key)
         config[key] = {
             "color": color,
             "base_color_factor": _hex_to_rgba(color, alpha),
-            "metallic_factor": 0.0,
-            "roughness_factor": (
-                0.12
-                if key in {"glass", "screen"}
-                else 0.25
-                if key in {"metal", "metal_dark", "appliance"}
-                else 0.62
-                if key == "stone"
-                else 0.82
-            ),
+            "metallic_factor": metallic,
+            "roughness_factor": roughness,
             "alpha": alpha,
         }
-    # Faceted metal is slightly metallic; glass stays dielectric but glossy.
-    for key in ("metal", "metal_dark"):
-        config[key]["metallic_factor"] = 0.65
     return config
+
+
+def _material_finish(material: str) -> Tuple[float, float, float]:
+    """Return (alpha, metallic, roughness) for a semantic material.
+
+    Fabric, bedding and rugs are deliberately matte; timber, stone, ceramic
+    and metal keep the tighter roughness values that read as their real
+    surfaces under image-based lighting. Glass is alpha-blended.
+    """
+    if material == "glass":
+        return 0.22, 0.0, 0.05
+    if material in {"metal", "metal_dark"}:
+        return 1.0, 0.72, 0.32 if material == "metal" else 0.4
+    if material == "appliance":
+        return 1.0, 0.35, 0.3
+    if material == "screen":
+        return 1.0, 0.25, 0.12
+    if material in {"wood", "wood_light", "wood_dark"}:
+        return 1.0, 0.0, 0.46
+    if material in {"stone", "counter"}:
+        return 1.0, 0.0, 0.32
+    if material == "ceramic":
+        return 1.0, 0.0, 0.2
+    if material in {"cabinet", "accent", "art"}:
+        return 1.0, 0.0, 0.55
+    if material in {"fabric", "fabric_light", "fabric_dark", "cushion", "bedding", "rug"}:
+        return 1.0, 0.0, 0.92
+    if material in {"plant", "soil"}:
+        return 1.0, 0.0, 0.78
+    if material == "light":
+        return 1.0, 0.0, 0.55
+    return 1.0, 0.0, 0.72
 
 
 def pbr_material(style: str, material: str) -> PBRMaterial:
     if material not in PALETTES[style]:
         raise KeyError(f"Unknown material '{material}' for style '{style}'")
     palette = PALETTES[style]
-    alpha = 0.32 if material == "glass" else 1.0
-    metallic = 0.65 if material in {"metal", "metal_dark"} else 0.0
-    roughness = (
-        0.12
-        if material in {"glass", "screen"}
-        else 0.25
-        if material in {"metal", "metal_dark", "appliance"}
-        else 0.62
-        if material == "stone"
-        else 0.82
-    )
+    alpha, metallic, roughness = _material_finish(material)
+    kwargs: Dict[str, object] = {}
+    if material == "light":
+        glow = _hex_to_rgba(palette[material])[:3]
+        kwargs["emissiveFactor"] = [min(1.0, value * 1.6) for value in glow]
     return PBRMaterial(
         name=f"{style}_{material}",
         baseColorFactor=_hex_to_rgba(palette[material], alpha),
         metallicFactor=metallic,
         roughnessFactor=roughness,
         alphaMode="BLEND" if alpha < 1.0 else "OPAQUE",
-        doubleSided=False,
+        doubleSided=material == "glass",
+        **kwargs,
     )
 
 

@@ -1,73 +1,115 @@
 # RealEstAI
 
-Turn a property's 2D floor plan and interior photographs into a validated,
-interactive 3D walkthrough.
+Turn a 2D floor plan into a furnished, validated, interactive 3D walkthrough.
 
-This repository contains:
+Upload one floor-plan image (PNG/JPEG, optional PDF when poppler is installed),
+confirm the inferred room types and style, and RealEstAI builds the house,
+furnishes it, proves the rooms are connected and walkable, and opens the tour.
+
+No interior photographs, sample houses, or prebuilt scenes are used. The
+original upload is kept unchanged, and the walkthrough only loads the assets
+generated for the requested job.
+
+## Repository layout
 
 | Directory | Role |
 | --- | --- |
-| `floor_plan_reconstruction/` | CPU reconstruction engine (FastAPI, :8002): parsing, COLMAP SfM, scene export, validation, provenance |
-| `frontend/` | Next.js 16 + React 19 + Three.js viewer (:3000), upload flow, tour pages |
-| `backend/` | FastAPI + PostgreSQL application API (:8000) for properties/media/jobs |
+| `floor_plan_reconstruction/` | Floor-plan reconstruction engine (FastAPI, `:8002`): parsing, structural repair, geometry, furnishing, validation, GLB export, provenance |
+| `frontend/` | Next.js 16 + React 19 + Three.js app (`:3000`): marketing, upload, room-type review, tour list, walkthrough viewer |
+| `backend/` | Optional FastAPI + PostgreSQL application API (`:8000`) for accounts, properties, and media metadata |
 | `reconstruction/` | Legacy prototype assets; not used by the current pipeline |
 
-The walkthrough is produced by the reconstruction engine. The backend/auth
-application is not required to create or view a reconstruction.
+The reconstruction engine is the only service required to create and view a
+walkthrough. The application backend and Supabase auth are optional for local
+reconstruction work.
 
-## What the reconstruction actually does
+## Pipeline
 
-A job follows these stages, each recorded in the job and its manifest:
+Every job records its stages and progress in the job record and in the final
+manifest:
 
 ```
-input_validation → floor_plan_parse → photo_analysis → photogrammetry
-→ geometry_build → scene_validation → manifest
+parsing_floor_plan → detecting_rooms_openings → validating_room_layout
+→ awaiting_room_types → optimizing_openings → generating_geometry
+→ placing_furniture → generating_lighting_materials
+→ validating_navigation_collisions → loading_walkthrough → completed
 ```
 
-* **Floor plan** — validates the uploaded bytes, extracts walls/rooms/doorways,
-  verifies or estimates scale, and derives room areas.
-* **Photographs** — validates and preprocesses each upload (EXIF orientation,
-  resize, average-hash duplicate detection, sharpness scoring, unreadable-image
-  rejection), then runs real COLMAP structure-from-motion (pycolmap CPU SIFT,
-  exhaustive matching, incremental mapping). The job reports registered
-  cameras, sparse points, reprojection error, and an honest status:
-  `reconstructed`, `partial`, `insufficient_overlap`, `failed` or `unavailable`.
-* **Geometry** — builds plan-constrained floors, ceilings, wall boxes with door
-  openings, collision volumes, a spawn point and a room connectivity graph.
-  Wall/floor textures are real crops from the uploaded photographs, UV-mapped
-  into the GLB.
-* **Validation** — reopens the exported GLB, checks meshes/faces/bounds, embedded
-  photo textures, per-job metadata, collision, spawn, passable doorways and the
-  room graph. A job is only marked `completed` after these checks pass.
-* **Provenance** — the per-job manifest (`schema_version 2.0`) records the
-  property ID, job ID, exact input filenames/sizes/SHA-256, stages actually run,
-  engine version, output asset hashes, warnings, inferred surfaces and
-  limitations.
+* **Floor plan** — validates the upload, detects and corrects small rotations
+  (up to ±20°), extracts walls, rooms, doorways and windows, verifies or
+  estimates scale, and derives room polygons and areas.
+* **Structural reconciliation** — before geometry is built, detected openings
+  are reconciled: duplicate reports of one gap are merged, a doorway wins over
+  a window on the same gap, and an implausibly narrow exterior "door" is kept
+  as a window rather than cutting a new hole through the envelope.
+* **Connection inference** — when two rooms share a real wall face and the
+  layout is plausible, a missing doorway can be inferred. Inference only
+  happens when the shared face can hold a usable opening, no window or door
+  already occupies it, the connection is sensible for the room types, and the
+  opening meets the minimum passage width. It never bridges the exterior
+  boundary, never turns a bathroom into a thoroughfare, and never invents
+  rooms or walls. Each repair is logged with its evidence.
+* **Bounded repair loop** — geometry, furniture and navigation are validated,
+  diagnosed, repaired and regenerated for up to 3 attempts or 120 seconds
+  (`REPAIR_MAX_ATTEMPTS`, `REPAIR_TIME_BUDGET_S`). Repairs include spawn
+  placement, collision alignment, doorway clearance, and furniture conflicts.
+  If the scene still cannot be made walkable, the job fails honestly with
+  diagnostics instead of publishing a broken walkthrough.
+* **Geometry** — plan-constrained floors, ceilings, walls with real openings,
+  window panes, cased doorways, collision volumes, a spawn point and a room
+  connectivity graph are exported as a GLB with a scene bundle.
+* **Furnishing** — room types are inferred from the plan, then a deterministic
+  procedural asset library furnishes each room in the selected style. Placement
+  respects walls, doorways, circulation and existing furniture; furniture is
+  never allowed to change room boundaries or block a required passage.
+* **Validation** — reopens the exported GLB and checks meshes, bounds,
+  collision, spawn, doorway clearance, room reachability, furniture placement
+  and assets. A job is marked `completed` only after these checks pass.
 
-There is **no sample-house fallback**: the viewer only loads the scene for the
-requested completed job, and a completed job without valid assets is reported
-as an error. The synthetic fixtures in the engine are development/test-only.
+Room-type confirmation lets you correct an inferred label or choose a style.
+It never asks you to draw doors, connect rooms, or fix the plan by hand.
 
-### Honest limitations
+If a plan genuinely cannot be interpreted (for example, no enclosed rooms
+found or the image is too small), the job fails with an explanation and, where
+available, optional retry preprocessing or a manual room-outline correction
+path. These are recovery paths, not part of normal operation.
 
-* Dense multi-view stereo requires CUDA. This environment is CPU-only, so
-  `dense.status = "unavailable"` is reported; the walkthrough uses plan
-  geometry with real photo textures, not a dense image-derived mesh.
-* Camera poses are real, but photogrammetry geometry is not used as the layout;
-  the floor plan constrains walls/rooms. Plan/photo aspect conflicts and poor
-  overlap are surfaced as warnings/limitations.
-* Windows, stairs, multi-floor, curved walls, door leaves, furniture and
-  semantic room labels are not reconstructed. Photograph-to-room texture
-  assignment is approximate; unseen surfaces (e.g. ceilings) are inferred.
-* Scale is verified only when the plan provides it; otherwise it is estimated
-  and flagged.
+## Provenance and assets
+
+The per-job manifest (`schema_version 3.0`, `workflow: floor_plan_only`)
+records the property and job IDs, input filename/size/SHA-256, engine version,
+stages actually run, output asset hashes, room types, furnishing, repairs,
+validation results, warnings, inferred surfaces and limitations. The scene
+bundle served to the viewer carries the same job identity.
+
+## Honest limitations
+
+* Geometry is axis-aligned. Curved or strongly angled walls, split levels and
+  multi-storey plans are not modelled; a single storey is generated.
+* Deskewing handles plans rotated up to ±20°. Severely perspective-distorted
+  scans, very low-resolution images (short side under 250 px) and heavily
+  stylised plans may be rejected or misread.
+* Scale is only verified when dimensions are supplied with the upload;
+  otherwise it is estimated and marked as approximate.
+* Very open plans without enough wall enclosure can fail with
+  `no_enclosed_rooms` and require retry or manual room outlines.
+* Door leaves, stairs, ramps, balconies as separate structures and fine
+  architectural trim are not reconstructed.
+* Windows are inferred as openings with sill/head panes, not measured glazing.
+* Furniture is procedural and deterministic, not a catalog of real products.
+* An inferred doorway is a best-effort structural repair validated against the
+  detected walls; it is rendered and physically navigable, but it is not a
+  claim about the real building.
+* The walkthrough is a navigable architectural approximation, not a
+  photorealistic survey.
 
 ## Prerequisites
 
 * Node.js 20+ (tested with Node 24)
 * Python 3.11
-* PostgreSQL 14+ and a `realestai` database if you use the application backend
-* Optional: poppler (`pdftoppm`) for PDF floor plans; CUDA COLMAP for dense MVS
+* PostgreSQL 14+ and a `realestai` database only if you use the optional
+  application backend
+* Optional: poppler (`pdftoppm`) for PDF floor plans
 
 ## Run locally
 
@@ -81,8 +123,8 @@ FRONTEND_URLS=http://localhost:3000,http://127.0.0.1:3000 \
   venv/bin/uvicorn main:app --host 127.0.0.1 --port 8002
 ```
 
-Health: `curl http://localhost:8002/health` — confirm `photogrammetry_available:
-true` and note `photogrammetry_cuda` / `dense_mvs_available`.
+Health: `curl http://localhost:8002/health` — confirm `status` is healthy and
+check `pdf_floor_plans` and `furnishing` capabilities.
 
 ### 2. Frontend (`:3000`)
 
@@ -93,9 +135,9 @@ cp env.example .env.local   # set NEXT_PUBLIC_RECONSTRUCTION_URL=http://localhos
 npm run dev
 ```
 
-Open `http://localhost:3000`, go to **New reconstruction**, upload a floor plan
-image/PDF and interior photographs, and wait for the job to complete. The tour
-page streams progress from the engine and then loads that job's GLB.
+Open `http://localhost:3000`, choose **New reconstruction**, upload a floor
+plan, confirm the room types and style, and wait for the walkthrough. The tour
+page polls the engine for progress and then loads that job's GLB.
 
 ### 3. Application backend (`:8000`, optional)
 
@@ -108,27 +150,35 @@ venv/bin/alembic upgrade head
 venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-The frontend can explore the property/tour pages with placeholder Supabase
+The frontend can browse property and tour pages with placeholder Supabase
 credentials; real authentication requires a Supabase project.
 
 ## Controls
 
 * Desktop: click to capture the pointer, mouse look, `W/A/S/D` or arrow keys,
   `Shift` to run, `Esc` to release.
-* Mobile/touch: movement joystick, drag to look.
-* Room navigation is limited to connected, walkable rooms from the parsed plan;
-  collision uses the exported wall boxes.
+* Mobile/touch: movement joystick, drag to look, room list in the options menu.
+* Room navigation is limited to connected, walkable rooms from the generated
+  plan; collision uses the exported wall, door and furniture volumes.
+* Debug geometry is not shown in the buyer-facing walkthrough.
 
 ## Tests
 
-Engine (real COLMAP + API + validator, synthetic fixtures only in tests):
+Engine (parser, structural repair, geometry, furnishing, validation, API):
 
 ```bash
 cd floor_plan_reconstruction
 venv/bin/pytest -q
 ```
 
-Frontend unit/lint/type/build:
+Backend:
+
+```bash
+cd backend
+venv/bin/pytest -q
+```
+
+Frontend unit, lint, type check and build:
 
 ```bash
 cd frontend
@@ -138,18 +188,23 @@ npx tsc --noEmit
 npm run build
 ```
 
-Browser E2E (requires engine on `:8002` and the dev frontend on `:3000`):
+Browser E2E (engine on `:8002`, dev frontend on `:3000`):
 
 ```bash
 cd frontend
 npm run test:e2e
 ```
 
-The desktop E2E uploads two different properties through the UI, verifies the
-exact uploaded files by SHA-256, COLMAP registration, photo textures, per-job
-GLB identity, room navigation through a doorway, duplicate-photo reporting and
-the absence of demo fallback. The mobile E2E verifies the joystick and
-touch-look controls. A production smoke test can be run against a built app:
+The desktop E2E uploads and rebuilds real properties through the UI, checks
+the stage flow, room review, GLB identity, collision and doorway navigation.
+The mobile E2E verifies the joystick and touch-look controls. The
+failure-correction E2E checks that unreadable or uninterpretable plans fail
+with diagnostics and recovery options rather than a fabricated scene.
+`frontend/scripts/verify-repaired-walkthrough.mjs` walks a completed job
+through every inferred doorway using the collision volumes and reports the
+closest approach and final room.
+
+A production smoke test can run against a built app:
 
 ```bash
 FRONTEND_URL=http://127.0.0.1:3001 node frontend/scripts/smoke-production.mjs
@@ -159,9 +214,8 @@ FRONTEND_URL=http://127.0.0.1:3001 node frontend/scripts/smoke-production.mjs
 
 ## Test assets
 
-The overlap photographs used by automated tests are six real photos from the
-public HuggingFace dataset `alexmkwizu/colmap-testing-dataset`, downscaled to
-1024 px. Attribution and provenance are in
-`floor_plan_reconstruction/tests/assets/sfm/README.txt`. The floor plans used in
-tests are synthetic fixtures generated by
-`floor_plan_reconstruction/create_*.py` and are never shown as user data.
+The real-world parser regression plan is
+`floor_plan_reconstruction/tests/fixtures/real-world/user-floor-plan-door-gaps.png`,
+supplied by the project owner for testing. Its source, hash and purpose are in
+`PROVENANCE.md` next to the file. Other parser fixtures are synthetic plans
+generated by the test helpers and are never served as user reconstructions.

@@ -283,7 +283,18 @@ def test_floor_plan_only_flow_furnishes_and_completes(client, fixture_plan):
     glb = client.get(f"/reconstructions/{job_id}/assets/scene.glb")
     assert glb.status_code == 200
     glb_json = read_glb_json(glb.content)
-    assert glb_json.get("images", []) == []
+    material_names = {
+        material.get("name", "") for material in glb_json.get("materials", [])
+    }
+    # Floor-plan-only jobs must never embed user photographs, but they do
+    # embed the generated PBR finishes (base colour + normal maps).
+    assert not any("photo" in name.lower() for name in material_names)
+    assert {
+        "arch_floor_wood",
+        "arch_wall_plaster",
+        "arch_ceiling_plaster",
+    } <= material_names
+    assert len(glb_json.get("images", [])) >= 6
     node_names = [node.get("name", "") for node in glb_json.get("nodes", [])]
     assert any(name.startswith("Furniture_") for name in node_names)
     exported_items = {

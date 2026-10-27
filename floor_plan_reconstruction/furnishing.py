@@ -30,6 +30,7 @@ from furniture_assets import (
     build_parts,
     material_config,
 )
+from house_model import select_spawn_room
 
 PLAYER_RADIUS = 0.24
 WALL_GAP = 0.02
@@ -37,6 +38,26 @@ CEILING_HEIGHT = 2.8
 DOOR_CLEAR_DEPTH = 0.85
 DOOR_SIDE_MARGIN = 0.25
 WALK_GRID_M = 0.1
+
+# Removing these would leave a room functionally incomplete, so the repair
+# path strips optional furniture first and only falls back to these when the
+# room cannot be walked at all otherwise.
+ESSENTIAL_ASSET_IDS = frozenset(
+    {
+        "bed_single",
+        "bed_double",
+        "bed_queen",
+        "bed_king",
+        "toilet",
+        "vanity",
+        "shower",
+        "bathtub",
+        "kitchen_counter_120",
+        "kitchen_counter_180",
+        "kitchen_counter_240",
+        "refrigerator",
+    }
+)
 SIDE_ORDER = ("north", "east", "south", "west")
 OPPOSITE_SIDE = {"north": "south", "south": "north", "east": "west", "west": "east"}
 SIDE_ROTATION = {"north": 0, "east": 270, "south": 180, "west": 90}
@@ -1153,6 +1174,123 @@ def _room_entry(layout: RoomLayout) -> Dict:
     }
 
 
+def is_essential_item(item: Dict) -> bool:
+    return str(item.get("asset_id")) in ESSENTIAL_ASSET_IDS
+
+
+def _remove_with_children(layout: "RoomLayout", item: Dict) -> List[Dict]:
+    removed = [item]
+    layout.items.remove(item)
+    pending = [item.get("id")]
+    while pending:
+        parent = pending.pop()
+        for child in list(layout.items):
+            if child.get("parent_item_id") == parent:
+                layout.items.remove(child)
+                removed.append(child)
+                pending.append(child.get("id"))
+    return removed
+
+
+def _drop_until_navigable(layout: "RoomLayout") -> List[Dict]:
+    """Remove optional furniture until the room's doorways stay connected."""
+    removed: List[Dict] = []
+    while not layout.navigation_check():
+        collision_items = [item for item in layout.items if item.get("collision")]
+        if not collision_items:
+            break
+        order = sorted(
+            collision_items,
+            key=lambda item: (is_essential_item(item), -layout.items.index(item)),
+        )
+        victim = None
+        for candidate in order:
+            index = layout.items.index(candidate)
+            layout.items.remove(candidate)
+            if layout.navigation_check():
+                victim = candidate
+                break
+            layout.items.insert(index, candidate)
+        if victim is None:
+            victim = order[0]
+        removed.extend(_remove_with_children(layout, victim))
+        layout.notes.append(
+            f"{victim['label']} was removed because it blocked the walking route."
+        )
+    return removed
+
+
+def refresh_furnishing(furnishing: Dict, rooms: Sequence[Dict]) -> Dict:
+    """Recompute per-room entries and the summary after items were changed."""
+    items = list(furnishing.get("items") or [])
+    by_room: Dict[int, List[Dict]] = {}
+    for item in items:
+        by_room.setdefault(int(item.get("room_id", -1)), []).append(item)
+    previous = {
+        int(entry.get("room_id", -1)): entry
+        for entry in furnishing.get("rooms") or []
+    }
+    entries: List[Dict] = []
+    for room in sorted(rooms, key=lambda entry: int(entry["id"])):
+        room_id = int(room["id"])
+        old = previous.get(room_id) or {}
+        room_items = by_room.get(room_id, [])
+        room_type = old.get("room_type") or "unknown"
+        if room_type == "unknown" and not room_items:
+            status = "unspecified"
+        elif not room_items:
+            status = "unfurnished"
+        elif any(skipped.get("required") for skipped in old.get("skipped") or []):
+            status = "partially_furnished"
+        else:
+            status = "furnished"
+        entries.append(
+            {
+                "room_id": room_id,
+                "name": old.get("name") or f"Room {room_id + 1}",
+                "room_type": room_type,
+                "area_m2": room.get("area_m2"),
+                "status": status,
+                "furniture_ids": [item["id"] for item in room_items],
+                "furniture": [
+                    {
+                        "id": item["id"],
+                        "asset_id": item["asset_id"],
+                        "label": item["label"],
+                        "position": item["position"],
+                        "rotation_deg": item["rotation_deg"],
+                        "collision": item["collision"],
+                    }
+                    for item in room_items
+                ],
+                "skipped": old.get("skipped") or [],
+                "notes": old.get("notes") or [],
+            }
+        )
+    furnishing["items"] = items
+    furnishing["rooms"] = entries
+    collision_items = [item for item in items if item.get("collision")]
+    summary = {
+        "items": len(items),
+        "collision_items": len(collision_items),
+        "rooms_total": len(entries),
+        "rooms_furnished": sum(
+            1 for entry in entries if entry["status"] in ("furnished", "partially_furnished")
+        ),
+        "rooms_unspecified": sum(1 for entry in entries if entry["status"] == "unspecified"),
+        "skipped_required": sum(
+            1
+            for entry in entries
+            for skipped in entry["skipped"]
+            if skipped.get("required")
+        ),
+        "style": furnishing.get("style"),
+        "variant": furnishing.get("variant"),
+    }
+    furnishing["summary"] = summary
+    return furnishing
+
+
 def furnish_floor_plan(
     rooms: Sequence[Dict],
     room_metadata: Dict[int, Dict],
@@ -1160,12 +1298,13 @@ def furnish_floor_plan(
     windows: Sequence[Dict],
     style: str = "modern",
     variant: int = 0,
+    allow_partial: bool = False,
 ) -> Dict:
     """Furnish every room deterministically from the parsed floor plan."""
     if style not in STYLES:
         raise ValueError(f"Unknown style '{style}'. Choose one of: {', '.join(STYLES)}.")
     variant = int(variant or 0)
-    spawn_room = max(rooms, key=lambda room: float(room.get("area_m2") or 0.0)) if rooms else None
+    spawn_room = select_spawn_room(rooms, doorways)
     spawn_room_id = int(spawn_room["id"]) if spawn_room else None
     room_entries: List[Dict] = []
     items: List[Dict] = []
@@ -1188,9 +1327,19 @@ def furnish_floor_plan(
         planner = PLANNERS.get(room_type, _plan_unknown)
         planner(layout)
         if not layout.navigation_check():
-            raise ValueError(
-                f"Furniture in {name} would disconnect the room's doorways; layout rejected."
-            )
+            if not allow_partial:
+                raise ValueError(
+                    f"Furniture in {name} would disconnect the room's doorways; layout rejected."
+                )
+            removed = _drop_until_navigable(layout)
+            if not layout.navigation_check():
+                raise ValueError(
+                    f"Furniture in {name} blocks the room even after removing optional items."
+                )
+            if removed:
+                warnings.append(
+                    f"{name}: removed {len(removed)} item(s) that blocked the walking route."
+                )
         entry = _room_entry(layout)
         room_entries.append(entry)
         items.extend(layout.items)
@@ -1321,7 +1470,7 @@ def validate_furnishing(
                         f"{first['id']} and {second['id']} have overlapping collision bounds."
                     )
 
-    spawn_room = max(rooms, key=lambda room: float(room.get("area_m2") or 0.0)) if rooms else None
+    spawn_room = select_spawn_room(rooms, doorways)
     navigation = {}
     for room in rooms:
         room_id = int(room["id"])

@@ -43,7 +43,16 @@ from furniture_assets import (
     material_config,
     pbr_material,
 )
+from surface_materials import surface_material, tile_size
 from furnishing import furniture_collision_items, validate_furnishing
+from house_model import (
+    HARD_MIN_PASSAGE_M,
+    PLAYER_RADIUS,
+    clear_spawn_in_room,
+    normalize_house,
+    resolve_spawn,
+    select_spawn_room,
+)
 
 FLOOR_THICKNESS = 0.06
 CEILING_THICKNESS = 0.06
@@ -52,10 +61,20 @@ DOOR_HEIGHT = 2.1
 WINDOW_SILL_HEIGHT = 0.9
 WINDOW_HEAD_HEIGHT = 2.1
 GLASS_COLOR = (168, 205, 227)
-MIN_PASSABLE_DOOR_M = 0.8
+MIN_PASSABLE_DOOR_M = HARD_MIN_PASSAGE_M
 MAX_PASSABLE_DOOR_M = 1.8
 MIN_WALL_LENGTH_M = 0.05
 TEXTURE_TILE_M = 2.4
+TILE_ROOM_TYPES = {
+    "kitchen",
+    "bathroom",
+    "bath",
+    "wc",
+    "toilet",
+    "laundry",
+    "utility",
+    "ensuite",
+}
 
 
 class GeometryBuildError(Exception):
@@ -209,6 +228,107 @@ def _merge_textured(meshes: List[trimesh.Trimesh], image: Image.Image) -> trimes
     return merged
 
 
+def _uv_box(
+    extents: Tuple[float, float, float],
+    center: Tuple[float, float, float],
+    tile: float,
+    material,
+    offset: Tuple[float, float] = (0.0, 0.0),
+) -> trimesh.Trimesh:
+    """Axis-aligned box with world-space UVs and a PBR material."""
+    width, height, depth = extents
+    cx, cy, cz = center
+    x0, x1 = cx - width / 2, cx + width / 2
+    y0, y1 = cy - height / 2, cy + height / 2
+    z0, z1 = cz - depth / 2, cz + depth / 2
+    faces = [
+        ([(x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)], 0, 1),
+        ([(x1, y0, z0), (x0, y0, z0), (x0, y1, z0), (x1, y1, z0)], 0, 1),
+        ([(x1, y0, z1), (x1, y0, z0), (x1, y1, z0), (x1, y1, z1)], 2, 1),
+        ([(x0, y0, z0), (x0, y0, z1), (x0, y1, z1), (x0, y1, z0)], 2, 1),
+        ([(x0, y1, z1), (x1, y1, z1), (x1, y1, z0), (x0, y1, z0)], 0, 2),
+        ([(x0, y0, z0), (x1, y0, z0), (x1, y0, z1), (x0, y0, z1)], 0, 2),
+    ]
+    vertices: List[Tuple[float, float, float]] = []
+    uv: List[Tuple[float, float]] = []
+    triangles: List[Tuple[int, int, int]] = []
+    for corners, u_index, v_index in faces:
+        base = len(vertices)
+        for corner in corners:
+            vertices.append(corner)
+            uv.append(
+                (
+                    corner[u_index] / tile + offset[0],
+                    corner[v_index] / tile + offset[1],
+                )
+            )
+        triangles.append((base, base + 1, base + 2))
+        triangles.append((base, base + 2, base + 3))
+    mesh = trimesh.Trimesh(
+        vertices=np.asarray(vertices, dtype=np.float64),
+        faces=np.asarray(triangles, dtype=np.int64),
+        process=False,
+    )
+    mesh.visual = TextureVisuals(uv=np.asarray(uv, dtype=np.float64), material=material)
+    return mesh
+
+
+def _uv_polygon(
+    polygon: Polygon,
+    top_y: float,
+    tile: float,
+    material,
+    downward: bool = False,
+) -> trimesh.Trimesh:
+    """Planar surface with plan-space UVs, optionally facing down."""
+    try:
+        points, faces = trimesh.creation.triangulate_polygon(polygon)
+    except Exception:
+        min_x, min_z, max_x, max_z = polygon.bounds
+        points = np.asarray(
+            [[min_x, min_z], [max_x, min_z], [max_x, max_z], [min_x, max_z]],
+            dtype=np.float64,
+        )
+        faces = np.asarray([[0, 1, 2], [0, 2, 3]], dtype=np.int64)
+    vertices = np.column_stack(
+        [points[:, 0], np.full(len(points), top_y), points[:, 1]]
+    )
+    mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    upward = float(np.sum(mesh.face_normals[:, 1])) >= 0
+    if (downward and upward) or (not downward and not upward):
+        mesh.invert()
+    uv = np.column_stack([points[:, 0] / tile, points[:, 1] / tile])
+    mesh.visual = TextureVisuals(uv=uv, material=material)
+    return mesh
+
+
+def _merge_uv(meshes: List[trimesh.Trimesh], material) -> trimesh.Trimesh:
+    vertices = np.concatenate([mesh.vertices for mesh in meshes], axis=0)
+    uv_parts = []
+    for mesh in meshes:
+        visual = getattr(mesh, "visual", None)
+        mesh_uv = getattr(visual, "uv", None)
+        if mesh_uv is None:
+            # Untextured trim/casing pieces still need a UV buffer so they can
+            # be merged with the same material without dropping other UVs.
+            uv_parts.append(np.zeros((len(mesh.vertices), 2), dtype=np.float64))
+        else:
+            uv_parts.append(np.asarray(mesh_uv, dtype=np.float64))
+    uv = np.concatenate(uv_parts, axis=0)
+    faces = []
+    offset = 0
+    for mesh in meshes:
+        faces.append(np.asarray(mesh.faces) + offset)
+        offset += len(mesh.vertices)
+    merged = trimesh.Trimesh(
+        vertices=vertices,
+        faces=np.concatenate(faces, axis=0),
+        process=False,
+    )
+    merged.visual = TextureVisuals(uv=uv, material=material)
+    return merged
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -326,6 +446,16 @@ class GeometryBuilder:
             raise GeometryBuildError(
                 floor_plan_result.get("error", "Floor plan did not parse successfully")
             )
+        normalization = normalize_house(
+            floor_plan_result, room_metadata=room_metadata
+        )
+        if not normalization.get("valid"):
+            raise GeometryBuildError(
+                "The floor plan cannot be reconstructed reliably: "
+                + "; ".join((normalization.get("errors") or ["unknown structural error"])[:5])
+            )
+        floor_plan_result = normalization["plan"]
+        house_model = normalization["model"]
         furnishing = furnishing or {}
         style = style if style in STYLES else "modern"
         photo_result = photo_result or {}
@@ -384,8 +514,10 @@ class GeometryBuilder:
             )
         else:
             limitations.append(
-                "Floors and ceilings use neutral colours and do not reproduce the "
-                "property's actual floor finish."
+                "Wall, floor and ceiling finishes are generated procedural PBR textures "
+                "(oak or stone flooring, painted plaster, timber trim). They are "
+                "representative finishes, not scans or samples of the property's actual "
+                "surfaces."
             )
 
         palette = photo_result.get("palette", {}) if photo_result else {}
@@ -403,6 +535,8 @@ class GeometryBuilder:
             room_textures,
             windows,
             use_photo_floor_textures=use_photo_floor_textures,
+            room_metadata=room_metadata,
+            style=style,
         )
         if furnishing.get("items"):
             emit("placing_furniture")
@@ -410,12 +544,31 @@ class GeometryBuilder:
                 geometry["scene"], furnishing, style
             )
         emit("generating_lighting_materials")
+        spawn = resolve_spawn(rooms, doorways)
+        if spawn is None:
+            raise GeometryBuildError("No room has a usable walkable spawn area")
         collision = self._build_collision(
-            rooms, walls, doorways, floor_plan_result, windows
+            rooms, walls, doorways, floor_plan_result, windows, spawn=spawn
         )
         collision = self._apply_collision_metadata(collision, room_metadata)
         collision["furniture"] = furniture_collision_items(furnishing)
         collision["furniture_style"] = style
+        spawn = self._finalize_spawn(collision, rooms, doorways, spawn)
+        house_repairs = list(normalization["repairs"])
+        if spawn.get("relocated"):
+            house_repairs.append(
+                {
+                    "code": "spawn_relocated_for_clearance",
+                    "object_ids": [spawn["room_id"]],
+                    "detail": (
+                        "The walkthrough spawn point was moved inside the entrance room so it "
+                        "is clear of wall and furniture colliders."
+                    ),
+                    "before": spawn.get("previous_position"),
+                    "after": spawn["position"][0:3:2],
+                }
+            )
+        house_model["repairs"] = house_repairs
         room_graph = self._build_room_graph(
             rooms,
             doorways,
@@ -424,16 +577,14 @@ class GeometryBuilder:
             job_id,
             furnishing=furnishing,
         )
+        # Validation result is recorded in the metadata, but an invalid layout is
+        # not a build error: SceneValidator reports structured per-item issues so
+        # the repair engine can diagnose and fix the placement before publishing.
         furnishing_validation = (
             validate_furnishing(furnishing, rooms, doorways, windows)
             if furnishing.get("items")
             else None
         )
-        if furnishing_validation and not furnishing_validation.get("valid"):
-            raise GeometryBuildError(
-                "Furniture layout failed validation: "
-                + "; ".join(furnishing_validation.get("issues", [])[:5])
-            )
         emit("validating_navigation_collisions")
 
         window_summary = geometry["summary"]
@@ -471,6 +622,7 @@ class GeometryBuilder:
         collision_path.write_text(json.dumps(collision, indent=2))
         graph_path = output_dir / "room_graph.json"
         graph_path.write_text(json.dumps(room_graph, indent=2))
+        (output_dir / "house_model.json").write_text(json.dumps(house_model, indent=2))
         if furnishing:
             (output_dir / "furniture.json").write_text(json.dumps(furnishing, indent=2))
 
@@ -542,7 +694,8 @@ class GeometryBuilder:
                     "room-confirmed wall texture crops from the uploaded photographs, "
                     "embedded in scene.glb; floors and ceilings are not photo-mapped"
                     if texture_sets
-                    else "neutral room materials plus original procedural PBR furniture"
+                    else "generated PBR surface materials (oak or stone flooring, painted "
+                    "plaster walls, timber trim) plus original procedural PBR furniture"
                 ),
                 "furniture": (
                     "deterministic constraint-based placement: wall anchoring, doorway "
@@ -572,6 +725,13 @@ class GeometryBuilder:
                 }
                 for room_id in sorted(room_metadata)
             ],
+            "house_model": {
+                "version": house_model.get("version"),
+                "spawn": house_model.get("spawn"),
+                "validation": house_model.get("validation"),
+                "repairs": house_repairs,
+                "ambiguities": house_model.get("ambiguities"),
+            },
             "scale": {
                 "pixels_per_meter": floor_plan_result.get("scale_pixels_per_meter"),
                 "source": floor_plan_result.get("scale_source"),
@@ -581,7 +741,13 @@ class GeometryBuilder:
         }
         (output_dir / "metadata.json").write_text(json.dumps(metadata, indent=2))
 
-        asset_names = ["scene.glb", "collision.json", "room_graph.json", "metadata.json"]
+        asset_names = [
+            "scene.glb",
+            "collision.json",
+            "room_graph.json",
+            "metadata.json",
+            "house_model.json",
+        ]
         if furnishing:
             asset_names.append("furniture.json")
         assets = build_asset_entries(
@@ -619,6 +785,11 @@ class GeometryBuilder:
             "photogrammetry": sfm_summary,
             "textures": texture_summary,
             "photogrammetry_assets": photogrammetry_assets,
+            "house_model": house_model,
+            "house_repairs": house_repairs,
+            "house_ambiguities": house_model.get("ambiguities") or [],
+            "house_warnings": normalization["warnings"],
+            "floor_plan": floor_plan_result,
         }
 
     # ------------------------------------------------------------------
@@ -849,8 +1020,12 @@ class GeometryBuilder:
         room_textures: Optional[Dict] = None,
         windows: Optional[List[Dict]] = None,
         use_photo_floor_textures: bool = False,
+        room_metadata: Optional[Dict[int, Dict]] = None,
+        style: str = "modern",
     ) -> Dict:
         room_textures = room_textures or {}
+        room_metadata = room_metadata or {}
+        style = style if style in STYLES else "modern"
         windows = windows or []
         floor_meshes: List[trimesh.Trimesh] = []
         ceiling_meshes: List[trimesh.Trimesh] = []
@@ -859,14 +1034,29 @@ class GeometryBuilder:
         glass_boxes: List[trimesh.Trimesh] = []
         textured_floors: Dict[int, Dict] = {}
         textured_walls: Dict[int, Dict] = {}
+        floor_surfaces: Dict[str, List[trimesh.Trimesh]] = {
+            "floor_wood": [],
+            "floor_tile": [],
+        }
+        ceiling_surfaces: List[trimesh.Trimesh] = []
+        plaster_skins: List[trimesh.Trimesh] = []
+        trim_boxes: List[trimesh.Trimesh] = []
         room_polygons: List[Tuple[int, Polygon]] = []
         textured_wall_boxes = 0
         rendered_windows = 0
+        wall_material = surface_material("wall_plaster", style)
+        ceiling_material = surface_material("ceiling_plaster", style)
+        trim_material = surface_material("arch_trim", style)
+        glass_material = surface_material("arch_glass", style)
+        floor_materials = {
+            key: surface_material(key, style) for key in ("floor_wood", "floor_tile")
+        }
 
         for room in rooms:
             polygon = _polygon_from_room(room)
             if polygon is None:
                 continue
+            room_id = int(room["id"])
             try:
                 floor_meshes.append(_extrude_flat(polygon, -FLOOR_THICKNESS, FLOOR_THICKNESS))
                 ceiling_meshes.append(
@@ -881,18 +1071,41 @@ class GeometryBuilder:
                     _extrude_flat(fallback, WALL_HEIGHT - CEILING_THICKNESS, CEILING_THICKNESS)
                 )
                 polygon = fallback
-            room_polygons.append((int(room["id"]), polygon))
+            room_polygons.append((room_id, polygon))
+            room_type = str(
+                (room_metadata.get(room_id) or {}).get("room_type")
+                or room.get("room_type")
+                or "unknown"
+            ).lower()
             texture = room_textures.get(room.get("id"))
+            floor_kind = "floor_tile" if room_type in TILE_ROOM_TYPES else "floor_wood"
+            floor_surfaces[floor_kind].append(
+                _uv_polygon(
+                    polygon,
+                    0.004,
+                    tile_size(floor_kind),
+                    floor_materials[floor_kind],
+                )
+            )
+            ceiling_surfaces.append(
+                _uv_polygon(
+                    polygon,
+                    WALL_HEIGHT - CEILING_THICKNESS - 0.004,
+                    tile_size("ceiling_plaster"),
+                    ceiling_material,
+                    downward=True,
+                )
+            )
             if texture and use_photo_floor_textures and texture.get("floor_image") is not None:
                 try:
-                    plane = _textured_polygon(
-                        polygon, 0.002, texture["floor_image"], TEXTURE_TILE_M
+                    photo_plane = _textured_polygon(
+                        polygon, 0.014, texture["floor_image"], TEXTURE_TILE_M
                     )
                     group = textured_floors.setdefault(
                         texture["index"],
                         {"image": texture["floor_image"], "meshes": []},
                     )
-                    group["meshes"].append(plane)
+                    group["meshes"].append(photo_plane)
                 except Exception:
                     pass
 
@@ -941,6 +1154,7 @@ class GeometryBuilder:
                     if not (run_start - half <= door_run <= run_end + half):
                         continue
                     segments = self._subtract_interval(segments, door_run - half, door_run + half)
+                base_segments = list(segments)
                 for window in windows_by_orientation[orientation]:
                     window_pos = window["center_m"][line_axis]
                     if abs(window_pos - line_pos) > thickness + 0.25:
@@ -968,6 +1182,22 @@ class GeometryBuilder:
                         else (line_pos, WALL_HEIGHT / 2, center_run)
                     )
                     wall_boxes.append(_box(extents, center))
+                    for sign in (-1, 1):
+                        skin_center = list(center)
+                        if orientation == "horizontal":
+                            skin_center[2] = line_pos + sign * (thickness / 2 + 0.004)
+                            skin_extents = (length, WALL_HEIGHT, 0.008)
+                        else:
+                            skin_center[0] = line_pos + sign * (thickness / 2 + 0.004)
+                            skin_extents = (0.008, WALL_HEIGHT, length)
+                        plaster_skins.append(
+                            _uv_box(
+                                skin_extents,
+                                tuple(skin_center),
+                                tile_size("wall_plaster"),
+                                wall_material,
+                            )
+                        )
                     surface_x = center_run if orientation == "horizontal" else line_pos
                     surface_z = line_pos if orientation == "horizontal" else center_run
                     for sign, texture in self._adjacent_room_textures(
@@ -980,10 +1210,10 @@ class GeometryBuilder:
                     ):
                         skin_center = list(center)
                         if orientation == "horizontal":
-                            skin_center[2] = line_pos + sign * (thickness / 2 + 0.008)
+                            skin_center[2] = line_pos + sign * (thickness / 2 + 0.012)
                             skin_extents = (length, WALL_HEIGHT, 0.012)
                         else:
-                            skin_center[0] = line_pos + sign * (thickness / 2 + 0.008)
+                            skin_center[0] = line_pos + sign * (thickness / 2 + 0.012)
                             skin_extents = (0.012, WALL_HEIGHT, length)
                         box = _textured_box(
                             skin_extents,
@@ -998,6 +1228,34 @@ class GeometryBuilder:
                         )
                         group["meshes"].append(box)
                         textured_wall_boxes += 1
+                for seg_start, seg_end in base_segments:
+                    length = seg_end - seg_start
+                    if length < 0.12:
+                        continue
+                    center_run = (seg_start + seg_end) / 2
+                    for sign in (-1, 1):
+                        if orientation == "horizontal":
+                            trim_boxes.append(
+                                _box(
+                                    (length, 0.1, 0.018),
+                                    (
+                                        center_run,
+                                        0.05,
+                                        line_pos + sign * (thickness / 2 + 0.013),
+                                    ),
+                                )
+                            )
+                        else:
+                            trim_boxes.append(
+                                _box(
+                                    (0.018, 0.1, length),
+                                    (
+                                        line_pos + sign * (thickness / 2 + 0.013),
+                                        0.05,
+                                        center_run,
+                                    ),
+                                )
+                            )
                 wall_index += 1
 
         for window in windows:
@@ -1075,13 +1333,29 @@ class GeometryBuilder:
                 )
             for pane_extents, pane_center in panes:
                 wall_boxes.append(_box(pane_extents, pane_center))
+                for sign in (-1, 1):
+                    skin_center = list(pane_center)
+                    if orientation == "horizontal":
+                        skin_center[2] = line_pos + sign * (thickness / 2 + 0.004)
+                        skin_extents = (width, pane_extents[1], 0.008)
+                    else:
+                        skin_center[0] = line_pos + sign * (thickness / 2 + 0.004)
+                        skin_extents = (0.008, pane_extents[1], width)
+                    plaster_skins.append(
+                        _uv_box(
+                            skin_extents,
+                            tuple(skin_center),
+                            tile_size("wall_plaster"),
+                            wall_material,
+                        )
+                    )
                 for sign, texture in adjacent_textures:
                     skin_center = list(pane_center)
                     if orientation == "horizontal":
-                        skin_center[2] = line_pos + sign * (thickness / 2 + 0.008)
+                        skin_center[2] = line_pos + sign * (thickness / 2 + 0.012)
                         skin_extents = (width, pane_extents[1], 0.012)
                     else:
-                        skin_center[0] = line_pos + sign * (thickness / 2 + 0.008)
+                        skin_center[0] = line_pos + sign * (thickness / 2 + 0.012)
                         skin_extents = (0.012, pane_extents[1], width)
                     box = _textured_box(
                         skin_extents,
@@ -1108,11 +1382,43 @@ class GeometryBuilder:
                 else (line_pos, (sill + head) / 2, window_run)
             )
             glass_boxes.append(_box(glass_extents, glass_center))
+            trim_depth = thickness + 0.06
+            if orientation == "horizontal":
+                trim_boxes.append(
+                    _box((width + 0.14, 0.035, thickness + 0.1), (window_run, sill - 0.0175, line_pos))
+                )
+                trim_boxes.append(
+                    _box((width + 0.12, 0.045, trim_depth), (window_run, head + 0.0225, line_pos))
+                )
+                for sign in (-1, 1):
+                    trim_boxes.append(
+                        _box(
+                            (0.04, pane_height, trim_depth),
+                            (window_run + sign * (half + 0.02), (sill + head) / 2, line_pos),
+                        )
+                    )
+            else:
+                trim_boxes.append(
+                    _box((thickness + 0.1, 0.035, width + 0.14), (line_pos, sill - 0.0175, window_run))
+                )
+                trim_boxes.append(
+                    _box((trim_depth, 0.045, width + 0.12), (line_pos, head + 0.0225, window_run))
+                )
+                for sign in (-1, 1):
+                    trim_boxes.append(
+                        _box(
+                            (trim_depth, pane_height, 0.04),
+                            (line_pos, (sill + head) / 2, window_run + sign * (half + 0.02)),
+                        )
+                    )
             rendered_windows += 1
 
         for door in doorways:
             orientation = door.get("orientation")
             if orientation not in ("horizontal", "vertical"):
+                continue
+            if door.get("open_plan"):
+                # An open-plan boundary has no wall to carry a lintel or frame.
                 continue
             run_axis = 0 if orientation == "horizontal" else 1
             line_axis = 1 if orientation == "horizontal" else 0
@@ -1139,13 +1445,29 @@ class GeometryBuilder:
                     (line_pos, -0.033, center_run),
                 )
             wall_boxes.append(_box(header_extents, header_center))
+            for sign in (-1, 1):
+                skin_center = list(header_center)
+                if orientation == "horizontal":
+                    skin_center[2] = line_pos + sign * (thickness / 2 + 0.004)
+                    skin_extents = (width, header_height, 0.008)
+                else:
+                    skin_center[0] = line_pos + sign * (thickness / 2 + 0.004)
+                    skin_extents = (0.008, header_height, width)
+                plaster_skins.append(
+                    _uv_box(
+                        skin_extents,
+                        tuple(skin_center),
+                        tile_size("wall_plaster"),
+                        wall_material,
+                    )
+                )
             for sign, texture in adjacent_textures:
                 skin_center = list(header_center)
                 if orientation == "horizontal":
-                    skin_center[2] = line_pos + sign * (thickness / 2 + 0.008)
+                    skin_center[2] = line_pos + sign * (thickness / 2 + 0.012)
                     skin_extents = (width, header_height, 0.012)
                 else:
-                    skin_center[0] = line_pos + sign * (thickness / 2 + 0.008)
+                    skin_center[0] = line_pos + sign * (thickness / 2 + 0.012)
                     skin_extents = (0.012, header_height, width)
                 header = _textured_box(
                     skin_extents,
@@ -1160,6 +1482,51 @@ class GeometryBuilder:
                 group["meshes"].append(header)
                 textured_wall_boxes += 1
             threshold_boxes.append(threshold)
+            casing_depth = thickness + 0.05
+            if orientation == "horizontal":
+                for sign in (-1, 1):
+                    trim_boxes.append(
+                        _box(
+                            (0.045, DOOR_HEIGHT, casing_depth),
+                            (center_run + sign * (width / 2 + 0.0225), DOOR_HEIGHT / 2, line_pos),
+                        )
+                    )
+                trim_boxes.append(
+                    _box(
+                        (width + 0.09, 0.05, casing_depth),
+                        (center_run, DOOR_HEIGHT + 0.025, line_pos),
+                    )
+                )
+                floor_surfaces["floor_wood"].append(
+                    _uv_box(
+                        (width, 0.008, thickness + 0.12),
+                        (center_run, 0.008, line_pos),
+                        tile_size("floor_wood"),
+                        floor_materials["floor_wood"],
+                    )
+                )
+            else:
+                for sign in (-1, 1):
+                    trim_boxes.append(
+                        _box(
+                            (casing_depth, DOOR_HEIGHT, 0.045),
+                            (line_pos, DOOR_HEIGHT / 2, center_run + sign * (width / 2 + 0.0225)),
+                        )
+                    )
+                trim_boxes.append(
+                    _box(
+                        (casing_depth, 0.05, width + 0.09),
+                        (line_pos, DOOR_HEIGHT + 0.025, center_run),
+                    )
+                )
+                floor_surfaces["floor_wood"].append(
+                    _uv_box(
+                        (thickness + 0.12, 0.008, width),
+                        (line_pos, 0.008, center_run),
+                        tile_size("floor_wood"),
+                        floor_materials["floor_wood"],
+                    )
+                )
 
         if not floor_meshes:
             raise GeometryBuildError("Could not build any floor geometry from the detected rooms")
@@ -1174,8 +1541,27 @@ class GeometryBuilder:
         if wall_boxes:
             walls_mesh = self._merge_with_color(wall_boxes, wall_color)
             scene.add_geometry(walls_mesh, node_name="Walls", geom_name="Walls")
+        if plaster_skins:
+            plaster_mesh = _merge_uv(plaster_skins, wall_material)
+            scene.add_geometry(
+                plaster_mesh, node_name="WallPlaster", geom_name="WallPlaster"
+            )
+        if ceiling_surfaces:
+            ceiling_mesh = _merge_uv(ceiling_surfaces, ceiling_material)
+            scene.add_geometry(
+                ceiling_mesh, node_name="CeilingSurfaces", geom_name="CeilingSurfaces"
+            )
+        for floor_kind, surfaces in floor_surfaces.items():
+            if not surfaces:
+                continue
+            floor_mesh = _merge_uv(surfaces, floor_materials[floor_kind])
+            name = "FloorWood" if floor_kind == "floor_wood" else "FloorTile"
+            scene.add_geometry(floor_mesh, node_name=name, geom_name=name)
+        if trim_boxes:
+            trim_mesh = _merge_uv(trim_boxes, trim_material)
+            scene.add_geometry(trim_mesh, node_name="Trim", geom_name="Trim")
         if glass_boxes:
-            windows_mesh = self._merge_with_color(glass_boxes, GLASS_COLOR)
+            windows_mesh = _merge_uv(glass_boxes, glass_material)
             scene.add_geometry(windows_mesh, node_name="Windows", geom_name="Windows")
         for index, group in textured_walls.items():
             walls_mesh = _merge_textured(group["meshes"], group["image"])
@@ -1196,8 +1582,13 @@ class GeometryBuilder:
             "summary": {
                 "wall_boxes": len(wall_boxes) + textured_wall_boxes,
                 "textured_wall_boxes": textured_wall_boxes,
+                "plaster_skins": len(plaster_skins),
+                "trim_pieces": len(trim_boxes),
                 "textured_floor_rooms": sum(
                     len(group["meshes"]) for group in textured_floors.values()
+                ),
+                "generated_floor_surfaces": sum(
+                    len(surfaces) for surfaces in floor_surfaces.values()
                 ),
                 "floors": len(floor_meshes),
                 "ceilings": len(ceiling_meshes),
@@ -1333,6 +1724,7 @@ class GeometryBuilder:
         doorways: List[Dict],
         floor_plan_result: Dict,
         windows: Optional[List[Dict]] = None,
+        spawn: Optional[Dict] = None,
     ) -> Dict:
         windows = windows or []
         thickness_scale = 1.0
@@ -1340,14 +1732,15 @@ class GeometryBuilder:
         for door in doorways:
             orientation = door.get("orientation")
             if orientation in doors_by_orientation:
-                width = float(door.get("width_m", 0.9))
+                detected = float(door.get("detected_width_m") or door.get("width_m", 0.9))
+                width = float(door.get("effective_width_m") or detected)
                 doors_by_orientation[orientation].append(
                     {
                         "id": door["id"],
                         "position": door["center_m"],
                         "orientation": orientation,
                         "width_m": round(min(MAX_PASSABLE_DOOR_M, max(MIN_PASSABLE_DOOR_M, width)), 2),
-                        "detected_width_m": round(width, 2),
+                        "detected_width_m": round(detected, 2),
                         "rooms": door.get("rooms", [None, None]),
                         "exterior": door.get("exterior", False),
                     }
@@ -1419,8 +1812,15 @@ class GeometryBuilder:
             box["window"] = True
             collision_walls.append(box)
 
-        spawn_room = max(rooms, key=lambda r: r.get("area_m2", 0))
-        spawn_x, spawn_z = spawn_room.get("spawn_m") or spawn_room.get("center_m", [1.0, 1.0])
+        spawn = spawn or resolve_spawn(rooms, doorways)
+        if spawn is None:
+            raise GeometryBuildError("No room has a usable walkable spawn area")
+        spawn_room = next(
+            (room for room in rooms if int(room["id"]) == int(spawn["room_id"])), None
+        )
+        if spawn_room is None:
+            raise GeometryBuildError("Spawn point references an unknown room")
+        spawn_x, spawn_z = spawn["position"]
         yaw = 0.0
         room_doors = [
             d
@@ -1431,8 +1831,6 @@ class GeometryBuilder:
         if room_doors:
             door_x, door_z = room_doors[0]["position"]
             yaw = float(np.arctan2(-(door_x - spawn_x), -(door_z - spawn_z)))
-        if self._point_hits_wall(spawn_x, spawn_z, collision_walls):
-            raise GeometryBuildError("Spawn point intersects a wall; reconstruction aborted")
         return {
             "units": "meters",
             "walls": collision_walls,
@@ -1446,11 +1844,117 @@ class GeometryBuilder:
                 }
                 for room in rooms
             ],
-            "spawn": {"position": [round(spawn_x, 3), 0.0, round(spawn_z, 3)], "yaw": round(yaw, 4)},
+            "spawn": {
+                "position": [round(spawn_x, 3), 0.0, round(spawn_z, 3)],
+                "yaw": round(yaw, 4),
+                "room_id": int(spawn_room["id"]),
+            },
             "footprint": floor_plan_result.get("footprint_m"),
             "wall_height": WALL_HEIGHT,
             "door_height": DOOR_HEIGHT,
         }
+
+    def _best_view_yaw(
+        self,
+        x: float,
+        z: float,
+        room: Dict,
+        walls: List[Dict],
+        fallback: float,
+    ) -> Tuple[float, float]:
+        """Pick the longest clear sightline inside the spawn room.
+
+        Spawning a camera 0.9 m from an entrance door produces a wall of pixels
+        for the first view. Choosing the room's longest interior view keeps the
+        verified spawn point while presenting the reconstructed space.
+        """
+        polygon = _polygon_from_room(room)
+        if polygon is None:
+            return fallback, 0.0
+        inner = polygon.buffer(-0.06)
+        if inner.is_empty:
+            inner = polygon
+        best_yaw = fallback
+        best_distance = 0.0
+        for index in range(32):
+            yaw = -math.pi + index * (2 * math.pi / 32)
+            dx = -math.sin(yaw)
+            dz = -math.cos(yaw)
+            distance = 0.0
+            for step in range(1, 141):
+                px = x + dx * 0.1 * step
+                pz = z + dz * 0.1 * step
+                if not inner.contains(Point(px, pz)):
+                    break
+                if self._point_hits_wall(px, pz, walls, 0.02):
+                    break
+                distance = step * 0.1
+            if distance > best_distance + 1e-6:
+                best_distance = distance
+                best_yaw = yaw
+        if best_distance < 1.0:
+            return fallback, best_distance
+        return best_yaw, best_distance
+
+    def _finalize_spawn(
+        self,
+        collision: Dict,
+        rooms: List[Dict],
+        doorways: List[Dict],
+        spawn: Dict,
+    ) -> Dict:
+        """Move the spawn inside the entrance room until it is genuinely clear."""
+        room_by_id = {int(room["id"]): room for room in rooms}
+        room = room_by_id.get(int(spawn["room_id"]))
+        previous = [float(spawn["position"][0]), float(spawn["position"][1])]
+        clear = None
+        if room is not None:
+            clear = clear_spawn_in_room(
+                room,
+                collision["walls"],
+                collision["furniture"],
+                preferred=previous,
+            )
+        if clear is None:
+            candidates = sorted(
+                rooms, key=lambda entry: -float(entry.get("area_m2") or 0.0)
+            )
+            for candidate in candidates:
+                clear = clear_spawn_in_room(
+                    candidate, collision["walls"], collision["furniture"]
+                )
+                if clear is not None:
+                    room = candidate
+                    break
+        if clear is None or room is None:
+            raise GeometryBuildError(
+                "No walkable spawn point is clear of walls and furniture"
+            )
+        moved = math.hypot(clear[0] - previous[0], clear[1] - previous[1]) > 0.001
+        yaw = 0.0
+        room_doors = [
+            door
+            for door in doorways
+            if int(room["id"])
+            in [int(value) for value in (door.get("rooms") or []) if value is not None]
+        ]
+        if room_doors:
+            door = room_doors[0].get("center_m") or [clear[0], clear[1]]
+            yaw = float(np.arctan2(-(door[0] - clear[0]), -(door[1] - clear[1])))
+        yaw, view_distance = self._best_view_yaw(
+            clear[0], clear[1], room, collision["walls"], yaw
+        )
+        collision["spawn"] = {
+            "position": [round(clear[0], 3), 0.0, round(clear[1], 3)],
+            "yaw": round(yaw, 4),
+            "room_id": int(room["id"]),
+            "view_distance_m": round(view_distance, 2),
+        }
+        spawn["room_id"] = int(room["id"])
+        spawn["position"] = [round(clear[0], 3), round(clear[1], 3)]
+        spawn["relocated"] = moved
+        spawn["previous_position"] = previous
+        return spawn
 
     def _point_hits_wall(self, x: float, z: float, walls: List[Dict], margin: float = 0.3) -> bool:
         for wall in walls:
@@ -1537,7 +2041,16 @@ class GeometryBuilder:
             adjacency[a].add(b)
             adjacency[b].add(a)
 
-        spawn_room = max(rooms, key=lambda r: r.get("area_m2", 0))
+        spawn_room = None
+        if isinstance(spawn, dict) and spawn.get("room_id") is not None:
+            spawn_room = next(
+                (room for room in rooms if int(room["id"]) == int(spawn["room_id"])),
+                None,
+            )
+        if spawn_room is None:
+            spawn_room = select_spawn_room(rooms, doorways)
+        if spawn_room is None:
+            raise GeometryBuildError("Room graph cannot be built without a spawn room")
         visited = {spawn_room["id"]}
         frontier = [spawn_room["id"]]
         while frontier:
@@ -1589,11 +2102,6 @@ class GeometryBuilder:
             furniture_nodes = [name for name in scene.geometry if name.startswith("Furniture_")]
             if not furniture_nodes:
                 raise GeometryBuildError("Furniture items exist but no furniture nodes were exported")
-            if furnishing_validation is None or not furnishing_validation.get("valid"):
-                issues = (furnishing_validation or {}).get("issues") or ["validation did not run"]
-                raise GeometryBuildError(
-                    "Furniture validation failed: " + "; ".join(issues[:5])
-                )
             expected_collision = sum(1 for item in items if item.get("collision"))
             if len(collision.get("furniture", [])) != expected_collision:
                 raise GeometryBuildError(
@@ -1604,6 +2112,27 @@ class GeometryBuilder:
             ]
             if not furnished_rooms:
                 raise GeometryBuildError("Room graph contains no furnished rooms")
+        spawn = collision.get("spawn") or {}
+        position = spawn.get("position")
+        room_ids = {int(room["id"]) for room in room_graph.get("nodes", [])}
+        if (
+            not position
+            or len(position) != 3
+            or int(spawn.get("room_id", -1)) not in room_ids
+        ):
+            raise GeometryBuildError("Collision spawn point is missing or references no room")
+        if self._point_hits_wall(
+            float(position[0]), float(position[2]), collision.get("walls", []), PLAYER_RADIUS
+        ):
+            raise GeometryBuildError("Spawn point intersects a wall")
+        for entry in collision.get("furniture", []):
+            minimum = entry.get("min") or [0.0, 0.0]
+            maximum = entry.get("max") or [0.0, 0.0]
+            if (
+                float(minimum[0]) - PLAYER_RADIUS <= float(position[0]) <= float(maximum[0]) + PLAYER_RADIUS
+                and float(minimum[1]) - PLAYER_RADIUS <= float(position[2]) <= float(maximum[1]) + PLAYER_RADIUS
+            ):
+                raise GeometryBuildError("Spawn point intersects furniture collision")
 
     def _export_glb(self, path: Path, geometry: Dict):
         try:

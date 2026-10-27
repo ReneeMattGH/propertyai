@@ -69,6 +69,7 @@ class JobStatus:
     DETECTING_ROOMS_OPENINGS = "detecting_rooms_openings"
     VALIDATING_ROOM_LAYOUT = "validating_room_layout"
     AWAITING_ROOM_TYPES = "awaiting_room_types"
+    OPTIMIZING_OPENINGS = "optimizing_openings"
     GENERATING_GEOMETRY = "generating_geometry"
     PLACING_FURNITURE = "placing_furniture"
     GENERATING_LIGHTING_MATERIALS = "generating_lighting_materials"
@@ -96,14 +97,15 @@ STAGE_LABELS = {
     JobStatus.QUEUED: "Queued",
     JobStatus.PARSING_FLOOR_PLAN: "Parsing floor plan",
     JobStatus.DETECTING_ROOMS_OPENINGS: "Detecting rooms and openings",
-    JobStatus.VALIDATING_ROOM_LAYOUT: "Validating room layout",
+    JobStatus.VALIDATING_ROOM_LAYOUT: "Checking room layout",
     JobStatus.AWAITING_ROOM_TYPES: "Confirm room types",
-    JobStatus.GENERATING_GEOMETRY: "Generating 3D geometry",
-    JobStatus.PLACING_FURNITURE: "Placing furniture",
-    JobStatus.GENERATING_LIGHTING_MATERIALS: "Generating lighting and materials",
-    JobStatus.VALIDATING_NAVIGATION_COLLISIONS: "Validating navigation and collisions",
-    JobStatus.LOADING_WALKTHROUGH: "Loading walkthrough",
-    JobStatus.COMPLETED: "Completed",
+    JobStatus.OPTIMIZING_OPENINGS: "Optimizing doors and walkways",
+    JobStatus.GENERATING_GEOMETRY: "Building the 3D house",
+    JobStatus.PLACING_FURNITURE: "Arranging furniture",
+    JobStatus.GENERATING_LIGHTING_MATERIALS: "Finishing materials and lighting",
+    JobStatus.VALIDATING_NAVIGATION_COLLISIONS: "Testing navigation",
+    JobStatus.LOADING_WALKTHROUGH: "Preparing walkthrough",
+    JobStatus.COMPLETED: "Ready to explore",
     JobStatus.FAILED: "Failed",
     JobStatus.CANCELLED: "Cancelled",
     # Legacy
@@ -127,6 +129,7 @@ STAGE_PROGRESS = {
     JobStatus.DETECTING_ROOMS_OPENINGS: 18.0,
     JobStatus.VALIDATING_ROOM_LAYOUT: 28.0,
     JobStatus.AWAITING_ROOM_TYPES: 34.0,
+    JobStatus.OPTIMIZING_OPENINGS: 40.0,
     JobStatus.GENERATING_GEOMETRY: 48.0,
     JobStatus.PLACING_FURNITURE: 62.0,
     JobStatus.GENERATING_LIGHTING_MATERIALS: 76.0,
@@ -631,6 +634,81 @@ class ReconstructionPipeline:
             }
         )
         update_job(job_id, stage_records=stage_records)
+
+    @staticmethod
+    def _repair_diagnostics(repair_result: Dict) -> Dict[str, Any]:
+        repair_log = repair_result.get("repair_log") or {}
+        normalization = repair_log.get("normalization") or {}
+        attempts = repair_log.get("attempts") or []
+        repairs = repair_log.get("repairs") or []
+        return {
+            "status": repair_log.get("status"),
+            "error_code": repair_result.get("error_code"),
+            "attempt_count": len(attempts),
+            "repair_count": len(repairs),
+            "conservative_fallback": bool(repair_log.get("conservative_fallback")),
+            "normalization": {
+                "valid": normalization.get("valid"),
+                "repairs": (normalization.get("repairs") or [])[:40],
+                "ambiguities": normalization.get("ambiguities") or [],
+                "warnings": normalization.get("warnings") or [],
+            },
+            "repairs": repairs[-40:],
+            "attempts_detail": [
+                {
+                    key: attempt.get(key)
+                    for key in (
+                        "attempt",
+                        "phase",
+                        "geometry_valid",
+                        "navigation_available",
+                        "errors",
+                        "navigation",
+                        "repairs",
+                        "elapsed_s",
+                    )
+                }
+                for attempt in attempts
+            ],
+            "unresolved": repair_log.get("unresolved") or [],
+            "log_url": f"/reconstructions/{repair_log.get('job_id')}/assets/repair_log.json"
+            if repair_log.get("job_id")
+            else None,
+        }
+
+    def _persist_repair_artifacts(
+        self,
+        output_dir: Path,
+        repair_result: Dict,
+        validation: Optional[Dict],
+    ) -> List[str]:
+        """Write the developer artifacts even when the job cannot be published."""
+        written: List[str] = []
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return written
+        payloads = {
+            "house_model.json": repair_result.get("house_model"),
+            "repair_log.json": repair_result.get("repair_log"),
+        }
+        for name, payload in payloads.items():
+            if not payload:
+                continue
+            try:
+                (output_dir / name).write_text(json.dumps(payload, indent=2))
+                written.append(name)
+            except OSError:
+                continue
+        if validation is not None:
+            try:
+                (output_dir / "validation_report.json").write_text(
+                    json.dumps(validation, indent=2)
+                )
+                written.append("validation_report.json")
+            except OSError:
+                pass
+        return written
 
     async def run(
         self,
@@ -1221,21 +1299,112 @@ class ReconstructionPipeline:
                 {"rooms": len(room_metadata), "source": "user"},
             )
 
-            self._set_stage(job_id, JobStatus.GENERATING_GEOMETRY)
-            furnishing = await asyncio.to_thread(
-                furnish_floor_plan,
-                rooms,
-                room_metadata,
-                floor_plan_result.get("doorways") or [],
-                floor_plan_result.get("windows") or [],
-                style,
-                variant,
+            self._set_stage(job_id, JobStatus.OPTIMIZING_OPENINGS)
+
+            from repair_engine import SceneRepairEngine
+
+            def _plan_furnishing(
+                plan, metadata, furnishing_style, furnishing_variant, allow_partial
+            ):
+                return furnish_floor_plan(
+                    plan.get("rooms") or [],
+                    metadata,
+                    plan.get("doorways") or [],
+                    plan.get("windows") or [],
+                    furnishing_style,
+                    furnishing_variant,
+                    allow_partial=allow_partial,
+                )
+
+            async def _furnish(
+                plan, metadata, furnishing_style, furnishing_variant, allow_partial
+            ):
+                return await asyncio.to_thread(
+                    _plan_furnishing,
+                    plan,
+                    metadata,
+                    furnishing_style,
+                    furnishing_variant,
+                    allow_partial,
+                )
+
+            async def _build_scene(plan, planned_furnishing, furnishing_style):
+                return await self.geometry_builder.build_geometry(
+                    job_id,
+                    plan,
+                    {},
+                    int(job.get("num_floors") or 1),
+                    (job.get("known_dimensions") or {}).get("width_meters"),
+                    (job.get("known_dimensions") or {}).get("length_meters"),
+                    None,
+                    progress_callback=self._geometry_progress(job_id),
+                    photo_manifest=None,
+                    room_metadata=room_metadata,
+                    use_photo_floor_textures=False,
+                    furnishing=planned_furnishing,
+                    style=furnishing_style,
+                )
+
+            async def _validate_scene(geometry, plan, planned_furnishing):
+                self._check_cancelled(job_id)
+                return await self.validator.validate_scene(
+                    job_id,
+                    geometry,
+                    photo_manifest=None,
+                    floor_plan_result=plan,
+                    furnishing=planned_furnishing,
+                )
+
+            def _repair_progress(event, payload):
+                if event == "repair_attempt":
+                    self._set_stage(job_id, JobStatus.OPTIMIZING_OPENINGS)
+                    actions = ", ".join(payload.get("actions") or [])
+                    log_event(
+                        job_id,
+                        "Automatic repair attempt "
+                        f"{payload.get('attempt')}: {actions}",
+                    )
+                elif event == "repair_regenerate" and payload.get("rebuild"):
+                    self._set_stage(job_id, JobStatus.GENERATING_GEOMETRY)
+                elif event in ("repair_validate", "repair_conservative"):
+                    self._set_stage(
+                        job_id, JobStatus.VALIDATING_NAVIGATION_COLLISIONS
+                    )
+
+            repair_result = await SceneRepairEngine().run(
+                job_id=job_id,
+                plan=floor_plan_result,
+                room_metadata=room_metadata,
+                style=style,
+                variant=variant,
+                furnish=_furnish,
+                build=_build_scene,
+                validate=_validate_scene,
+                progress=_repair_progress,
+                log=lambda message: log_event(job_id, message),
+                abort=lambda: bool((get_job(job_id) or {}).get("cancel_requested")),
             )
+            self._check_cancelled(job_id)
+
+            floor_plan_result = repair_result.get("plan") or floor_plan_result
+            rooms = floor_plan_result.get("rooms") or rooms
+            furnishing = repair_result.get("furnishing") or {}
+            house_model = repair_result.get("house_model") or {}
+            repair_log = repair_result.get("repair_log") or {}
+            geometry_result = repair_result.get("geometry")
+            validation_result = repair_result.get("validation") or {}
+            if furnishing.get("variant") is not None:
+                variant = int(furnishing.get("variant"))
+            validation_result["scale_verified"] = bool(
+                floor_plan_result.get("scale_verified")
+            )
+            repair_diagnostics = self._repair_diagnostics(repair_result)
+
             self._record_stage(
                 job_id,
                 stage_records,
                 "furnishing_plan",
-                "completed",
+                "completed" if furnishing.get("items") else "failed",
                 {
                     "style": style,
                     "variant": variant,
@@ -1246,6 +1415,8 @@ class ReconstructionPipeline:
                     "rooms_unspecified": (furnishing.get("summary") or {}).get(
                         "rooms_unspecified", 0
                     ),
+                    "repair_status": repair_log.get("status"),
+                    "repair_attempts": repair_diagnostics["attempt_count"],
                 },
             )
             log_event(
@@ -1254,96 +1425,117 @@ class ReconstructionPipeline:
                 f"style {STYLE_LABELS.get(style, style)}, variant {variant}",
             )
 
-            geometry_result = await self.geometry_builder.build_geometry(
-                job_id,
-                floor_plan_result,
-                {},
-                int(job.get("num_floors") or 1),
-                (job.get("known_dimensions") or {}).get("width_meters"),
-                (job.get("known_dimensions") or {}).get("length_meters"),
-                None,
-                progress_callback=self._geometry_progress(job_id),
-                photo_manifest=None,
-                room_metadata=room_metadata,
-                use_photo_floor_textures=False,
-                furnishing=furnishing,
-                style=style,
-            )
             diagnostics: Dict[str, Any] = dict(job.get("diagnostics") or {})
-            diagnostics["geometry"] = {
-                key: geometry_result.get(key)
-                for key in (
-                    "vertices_count",
-                    "faces_count",
-                    "collision_walls",
-                    "collision_furniture",
-                    "rooms_count",
-                    "room_graph_edges",
-                    "furniture_items",
-                    "warnings",
-                    "limitations",
-                )
-            }
             diagnostics["furnishing"] = {
                 "style": style,
                 "variant": variant,
                 "summary": furnishing.get("summary"),
                 "warnings": furnishing.get("warnings"),
             }
-            update_job(job_id, diagnostics=diagnostics)
-            self._record_stage(
-                job_id,
-                stage_records,
-                "geometry_build",
-                "completed",
-                {
-                    "vertices": geometry_result["vertices_count"],
-                    "faces": geometry_result["faces_count"],
-                    "collision_walls": geometry_result["collision_walls"],
-                    "collision_furniture": geometry_result["collision_furniture"],
-                    "furniture_items": geometry_result["furniture_items"],
-                    "primary_asset": "scene.glb",
-                },
-            )
-            log_event(
-                job_id,
-                f"Geometry built: {geometry_result['vertices_count']} vertices, "
-                f"{geometry_result['faces_count']} faces, "
-                f"{geometry_result['furniture_items']} furniture item(s)",
-            )
-
-            self._set_stage(job_id, JobStatus.VALIDATING_NAVIGATION_COLLISIONS)
-            validation_result = await self.validator.validate_scene(
-                job_id,
-                geometry_result,
-                photo_manifest=None,
-                floor_plan_result=floor_plan_result,
-                furnishing=furnishing,
-            )
-            validation_result["scale_verified"] = bool(
-                floor_plan_result.get("scale_verified")
-            )
-            self._check_cancelled(job_id)
-
-            warnings = list(
-                dict.fromkeys(
-                    list(floor_plan_result.get("warnings", []))
-                    + list(furnishing.get("warnings", []))
-                    + list(geometry_result.get("warnings", []))
-                    + list(validation_result.get("warnings", []))
+            diagnostics["repair"] = repair_diagnostics
+            diagnostics["house_model"] = {
+                "version": house_model.get("version"),
+                "spawn": house_model.get("spawn"),
+                "rooms": len(house_model.get("rooms") or []),
+                "doorways": len(house_model.get("doorways") or []),
+                "walls": len(house_model.get("walls") or []),
+                "validation": house_model.get("validation"),
+                "ambiguities": house_model.get("ambiguities") or [],
+                "warnings": house_model.get("warnings") or [],
+            }
+            if geometry_result:
+                diagnostics["geometry"] = {
+                    key: geometry_result.get(key)
+                    for key in (
+                        "vertices_count",
+                        "faces_count",
+                        "collision_walls",
+                        "collision_furniture",
+                        "rooms_count",
+                        "room_graph_edges",
+                        "furniture_items",
+                        "warnings",
+                        "limitations",
+                    )
+                }
+                self._record_stage(
+                    job_id,
+                    stage_records,
+                    "geometry_build",
+                    "completed",
+                    {
+                        "vertices": geometry_result["vertices_count"],
+                        "faces": geometry_result["faces_count"],
+                        "collision_walls": geometry_result["collision_walls"],
+                        "collision_furniture": geometry_result["collision_furniture"],
+                        "furniture_items": geometry_result["furniture_items"],
+                        "primary_asset": "scene.glb",
+                        "repair_status": repair_log.get("status"),
+                    },
                 )
+                log_event(
+                    job_id,
+                    f"Geometry built: {geometry_result['vertices_count']} vertices, "
+                    f"{geometry_result['faces_count']} faces, "
+                    f"{geometry_result['furniture_items']} furniture item(s)",
+                )
+            else:
+                self._record_stage(
+                    job_id,
+                    stage_records,
+                    "geometry_build",
+                    "failed",
+                    {"error": repair_result.get("message")},
+                )
+            if validation_result:
+                self._record_stage(
+                    job_id,
+                    stage_records,
+                    "scene_validation",
+                    "completed" if validation_result["geometry_valid"] else "failed",
+                    {
+                        "geometry_valid": validation_result["geometry_valid"],
+                        "navigation_available": validation_result["navigation_available"],
+                        "checks": validation_result.get("checks", {}),
+                        "issues": (validation_result.get("stats") or {}).get(
+                            "issues", []
+                        )[:20],
+                        "repair_attempts": repair_diagnostics["attempt_count"],
+                    },
+                )
+            else:
+                self._record_stage(
+                    job_id,
+                    stage_records,
+                    "scene_validation",
+                    "failed",
+                    {
+                        "error": (
+                            "Scene validation could not run because the scene was not "
+                            "generated."
+                        )
+                    },
+                )
+            update_job(job_id, diagnostics=diagnostics)
+
+            warning_items = (
+                list(floor_plan_result.get("warnings", []))
+                + list(furnishing.get("warnings", []))
+                + list((geometry_result or {}).get("warnings", []))
+                + list(validation_result.get("warnings", []))
             )
-            limitations = list(dict.fromkeys(geometry_result.get("limitations", [])))
-            self._record_stage(
-                job_id,
-                stage_records,
-                "scene_validation",
-                "completed" if validation_result["geometry_valid"] else "failed",
-                {
-                    "geometry_valid": validation_result["geometry_valid"],
-                    "navigation_available": validation_result["navigation_available"],
-                    "checks": validation_result.get("checks", {}),
-                },
+            if repair_diagnostics["repair_count"]:
+                warning_items.append(
+                    f"Automatic repair applied {repair_diagnostics['repair_count']} "
+                    "correction(s) before the final validation."
+                )
+            for ambiguity in repair_diagnostics["normalization"]["ambiguities"][:5]:
+                message = ambiguity.get("message") or ambiguity.get("detail")
+                if message:
+                    warning_items.append(f"Structural ambiguity: {message}")
+            warnings = list(dict.fromkeys(warning_items))
+            limitations = list(
+                dict.fromkeys((geometry_result or {}).get("limitations", []))
             )
             room_payload = []
             label_map = dict(ROOM_TYPE_LABELS)
@@ -1389,15 +1581,44 @@ class ReconstructionPipeline:
                 for entry in room_payload
             ]
 
-            if not validation_result["geometry_valid"]:
-                message = "Scene validation failed: " + "; ".join(
-                    validation_result.get("errors", ["unknown validation error"])
+            if not repair_result.get("ok") or not validation_result.get("geometry_valid"):
+                message = repair_result.get("message") or (
+                    "Scene validation failed after automatic repair: "
+                    + "; ".join(
+                        validation_result.get("errors", ["unknown validation error"])
+                    )
                 )
+                error_code = repair_result.get("error_code") or "scene_validation_failed"
+                failed_stage = (
+                    JobStatus.VALIDATING_NAVIGATION_COLLISIONS
+                    if geometry_result and validation_result
+                    else JobStatus.GENERATING_GEOMETRY
+                )
+                output_dir = Path(
+                    (geometry_result or {}).get("output_dir") or (OUTPUT_DIR / job_id)
+                )
+                written = self._persist_repair_artifacts(
+                    output_dir,
+                    repair_result,
+                    validation_result
+                    or {
+                        "status": "failed",
+                        "geometry_valid": False,
+                        "navigation_available": False,
+                        "scale_verified": bool(floor_plan_result.get("scale_verified")),
+                        "checks": {},
+                        "errors": [message],
+                        "warnings": warnings,
+                        "stats": {},
+                    },
+                )
+                repair_diagnostics["artifacts"] = written
                 update_job(
                     job_id,
                     diagnostics={
                         **diagnostics,
                         "scene_validation": validation_result,
+                        "repair": repair_diagnostics,
                         "furnishing": {
                             "style": style,
                             "variant": variant,
@@ -1406,7 +1627,7 @@ class ReconstructionPipeline:
                     },
                     geometry_valid=False,
                     navigation_available=False,
-                    assets=geometry_result.get("assets", []),
+                    assets=(geometry_result or {}).get("assets", []),
                     warnings=warnings,
                     limitations=limitations,
                     room_types=concise_rooms,
@@ -1415,18 +1636,27 @@ class ReconstructionPipeline:
                     furnishing_style=style,
                     furnishing_variant=variant,
                     error=message,
-                    error_code="scene_validation_failed",
-                    failed_stage=JobStatus.VALIDATING_NAVIGATION_COLLISIONS,
+                    error_code=error_code,
+                    failed_stage=failed_stage,
                     status=JobStatus.FAILED,
                     current_stage="failed",
-                    progress=STAGE_PROGRESS[
-                        JobStatus.VALIDATING_NAVIGATION_COLLISIONS
-                    ],
+                    progress=STAGE_PROGRESS.get(
+                        failed_stage,
+                        STAGE_PROGRESS[JobStatus.GENERATING_GEOMETRY],
+                    ),
                 )
-                log_event(job_id, message)
+                log_event(
+                    job_id,
+                    "Reconstruction failed after "
+                    f"{repair_diagnostics['attempt_count']} automatic repair attempt(s): "
+                    f"{message}",
+                )
                 return
 
             self._set_stage(job_id, JobStatus.LOADING_WALKTHROUGH)
+            repair_diagnostics["artifacts"] = self._persist_repair_artifacts(
+                Path(geometry_result["output_dir"]), repair_result, validation_result
+            )
             collision = json.loads(
                 (Path(geometry_result["output_dir"]) / "collision.json").read_text()
             )
@@ -1499,6 +1729,17 @@ class ReconstructionPipeline:
                     "checks": validation_result.get("checks", {}),
                     "stats": validation_result.get("stats", {}),
                 },
+                "repair": {
+                    "status": repair_diagnostics["status"],
+                    "attempts": repair_diagnostics["attempt_count"],
+                    "repair_count": repair_diagnostics["repair_count"],
+                    "conservative_fallback": repair_diagnostics[
+                        "conservative_fallback"
+                    ],
+                    "normalization": repair_diagnostics["normalization"],
+                    "repairs": repair_diagnostics["repairs"],
+                    "unresolved": repair_diagnostics["unresolved"],
+                },
                 "warnings": warnings,
                 "limitations": limitations,
             }
@@ -1515,6 +1756,7 @@ class ReconstructionPipeline:
                 diagnostics={
                     **diagnostics,
                     "scene_validation": validation_result,
+                    "repair": repair_diagnostics,
                     "furnishing": {
                         "style": style,
                         "variant": variant,
@@ -3232,6 +3474,26 @@ async def get_reconstruction_diagnostics(job_id: str):
             failure_report = json.loads(parse_failure_path.read_text())
         except (OSError, json.JSONDecodeError):
             failure_report = None
+    output_dir = OUTPUT_DIR / job_id
+    for name in ("house_model.json", "repair_log.json", "validation_report.json"):
+        path = output_dir / name
+        if not path.is_file():
+            continue
+        artifacts.append(
+            {
+                "name": name,
+                "url": f"/reconstructions/{job_id}/assets/{name}",
+                "type": path.suffix.lstrip("."),
+                "size_bytes": path.stat().st_size,
+            }
+        )
+    repair_log = None
+    repair_log_path = output_dir / "repair_log.json"
+    if repair_log_path.is_file():
+        try:
+            repair_log = json.loads(repair_log_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            repair_log = None
     floor_plan = (job.get("diagnostics") or {}).get("floor_plan") or {}
     correctable = job.get("status") in {"failed", "cancelled"} or (
         job.get("status") == JobStatus.COMPLETED
@@ -3296,6 +3558,8 @@ async def get_reconstruction_diagnostics(job_id: str):
         "furniture_count": job.get("furniture_count"),
         "photo_review": (job.get("diagnostics") or {}).get("photo_review")
         or job.get("photo_review_summary"),
+        "repair": (job.get("diagnostics") or {}).get("repair") or repair_log,
+        "house_model": (job.get("diagnostics") or {}).get("house_model"),
         "artifacts": artifacts,
         "correction_supported": True,
         "manual_plan_supported": correctable,

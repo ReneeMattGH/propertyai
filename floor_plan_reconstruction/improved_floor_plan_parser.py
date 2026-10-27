@@ -14,9 +14,11 @@ Pipeline:
   5. Detect door swing arcs to distinguish doors from windows where possible.
   6. Estimate scale from user-supplied dimensions or from typical room sizes.
 
-Only axis-aligned walls are reconstructed; diagonal walls are reported as a
-limitation. All outputs are plain dicts so they can be persisted as JSON.
-Every stage writes intermediate images so a failed parse is inspectable.
+Slightly rotated scans are straightened from their dominant wall angle before
+line extraction; only axis-aligned walls are reconstructed, and diagonal walls
+are reported as a limitation. All outputs are plain dicts so they can be
+persisted as JSON. Every stage writes intermediate images so a failed parse is
+inspectable.
 """
 from __future__ import annotations
 
@@ -41,6 +43,9 @@ MAX_DOOR_M = 2.2
 DOOR_ARC_THRESHOLD = 0.30
 MIN_USABLE_ROOM_AREA_M2 = 0.55
 MIN_USABLE_ROOM_SIDE_M = 0.45
+MAX_SKEW_ANGLE_DEG = 20.0
+MIN_SKEW_ANGLE_DEG = 1.0
+MIN_SKEW_SUPPORT = 0.35
 
 
 class FloorPlanParseError(Exception):
@@ -300,6 +305,70 @@ class ImprovedFloorPlanParser:
         wall_mask, mask_meta, probe = self._extract_wall_mask(
             gray, min_line, warnings, known_width, known_length, wall_polarity
         )
+
+        deskew_deg = 0.0
+        skew = self._detect_skew_angle(wall_mask, min_side)
+        if abs(skew) >= MIN_SKEW_ANGLE_DEG:
+            # A single resampled angle can leave thin, anti-aliased walls on a
+            # pixel boundary where run-length extraction under-reads them. Probe
+            # the detected angle and two small perturbations, then keep the
+            # candidate whose wall mask actually yields the most valid rooms.
+            source_image = image
+            candidates = []
+            for offset in (0.0, -0.2, 0.2):
+                angle = float(skew + offset)
+                candidate_image = self._rotate_plan_image(source_image, angle)
+                candidate_gray = cv2.cvtColor(candidate_image, cv2.COLOR_BGR2GRAY)
+                candidate_side = min(candidate_image.shape[:2])
+                candidate_line = max(14, int(candidate_side * 0.02))
+                candidate_warnings: List[str] = []
+                candidate_mask, candidate_meta, candidate_probe = self._extract_wall_mask(
+                    candidate_gray,
+                    candidate_line,
+                    candidate_warnings,
+                    known_width,
+                    known_length,
+                    wall_polarity,
+                )
+                candidate_probe = candidate_probe or {}
+                candidates.append(
+                    {
+                        "angle": angle,
+                        "image": candidate_image,
+                        "gray": candidate_gray,
+                        "mask": candidate_mask,
+                        "meta": candidate_meta,
+                        "probe": candidate_probe,
+                        "warnings": candidate_warnings,
+                        "valid": bool(candidate_probe.get("valid")),
+                        "rooms": len(candidate_probe.get("rooms") or []),
+                        "coverage": float(candidate_probe.get("coverage") or 0.0),
+                    }
+                )
+            best = max(
+                candidates,
+                key=lambda entry: (
+                    entry["valid"],
+                    entry["rooms"],
+                    entry["coverage"],
+                    -abs(entry["angle"] - skew),
+                ),
+            )
+            deskew_deg = best["angle"]
+            image = best["image"]
+            gray = best["gray"]
+            wall_mask = best["mask"]
+            mask_meta = best["meta"]
+            probe = best["probe"]
+            warnings.extend(best["warnings"])
+            height, width = image.shape[:2]
+            min_side = min(width, height)
+            min_line = max(14, int(min_side * 0.02))
+            self._write_normalized(diagnostics_dir, image, width, height)
+            warnings.append(
+                f"The plan was rotated {abs(deskew_deg):.1f}°; it was straightened from its "
+                "dominant wall direction before reconstruction."
+            )
         emit("detecting_rooms")
         cv2.imwrite(str(diagnostics_dir / "walls_mask.png"), wall_mask)
         wall_ratio = float(np.count_nonzero(wall_mask)) / float(width * height)
@@ -592,6 +661,7 @@ class ImprovedFloorPlanParser:
         segmentation_info = {
             "selected_attempt": attempt["name"],
             "preprocessing": options_used,
+            "deskew_deg": round(deskew_deg, 2),
             "attempts": attempts,
             "gap_count": len(gaps),
             "sealed_gaps": sum(1 for gap in gaps if gap.get("sealed")),
@@ -608,6 +678,7 @@ class ImprovedFloorPlanParser:
             "status": "completed",
             "image_dimensions": [int(width), int(height)],
             "preprocessing": options_used,
+            "deskew_deg": round(deskew_deg, 2),
             "inverted_drawing": bool(mask_meta.get("inverted")),
             "wall_pixel_ratio": round(wall_ratio, 4),
             "scale_pixels_per_meter": round(scale, 3),
@@ -626,6 +697,83 @@ class ImprovedFloorPlanParser:
             "segmentation": segmentation_info,
             "warnings": warnings,
         }
+
+    # ------------------------------------------------------------------
+    # Rotation correction
+    # ------------------------------------------------------------------
+    def _detect_skew_angle(self, wall_mask: np.ndarray, min_side: int) -> float:
+        """Return the dominant wall angle when the drawing is slightly rotated.
+
+        Only small corrections are attempted. A plan whose longest line work is
+        actually diagonal (45° architecture, dimension callouts, text) is left
+        untouched so the existing diagonal-wall limitation still applies
+        instead of silently inventing an axis-aligned layout.
+        """
+        if wall_mask is None or not np.any(wall_mask):
+            return 0.0
+        min_length = max(24, int(min_side * 0.08))
+        segments = cv2.HoughLinesP(
+            wall_mask,
+            1,
+            np.pi / 360,
+            threshold=40,
+            minLineLength=min_length,
+            maxLineGap=4,
+        )
+        if segments is None:
+            return 0.0
+        total = 0.0
+        entries: List[Tuple[float, float]] = []
+        for x1, y1, x2, y2 in segments.reshape(-1, 4):
+            length = float(math.hypot(x2 - x1, y2 - y1))
+            if length < min_length:
+                continue
+            total += length
+            angle = math.degrees(math.atan2(y2 - y1, x2 - x1))
+            angle = ((angle + 45.0) % 90.0) - 45.0
+            if -MAX_SKEW_ANGLE_DEG <= angle <= MAX_SKEW_ANGLE_DEG:
+                entries.append((angle, length))
+        if len(entries) < 5 or total <= 0:
+            return 0.0
+        bins = np.zeros(int(MAX_SKEW_ANGLE_DEG * 8) + 1)
+        for angle, length in entries:
+            index = int(round((angle + MAX_SKEW_ANGLE_DEG) * 4))
+            if 0 <= index < len(bins):
+                bins[index] += length
+        peak_index = int(np.argmax(bins))
+        if bins[peak_index] <= 0:
+            return 0.0
+        peak = peak_index / 4.0 - MAX_SKEW_ANGLE_DEG
+        selected = [(angle, length) for angle, length in entries if abs(angle - peak) <= 1.5]
+        support = sum(length for _, length in selected)
+        if support / total < MIN_SKEW_SUPPORT:
+            return 0.0
+        angle = sum(angle * length for angle, length in selected) / support
+        if abs(angle) < MIN_SKEW_ANGLE_DEG or abs(angle) > MAX_SKEW_ANGLE_DEG:
+            return 0.0
+        return angle
+
+    def _rotate_plan_image(self, image: np.ndarray, angle_deg: float) -> np.ndarray:
+        height, width = image.shape[:2]
+        matrix = cv2.getRotationMatrix2D((width / 2.0, height / 2.0), angle_deg, 1.0)
+        cos = abs(matrix[0, 0])
+        sin = abs(matrix[0, 1])
+        new_width = max(1, int(height * sin + width * cos))
+        new_height = max(1, int(height * cos + width * sin))
+        matrix[0, 2] += new_width / 2.0 - width / 2.0
+        matrix[1, 2] += new_height / 2.0 - height / 2.0
+        border = np.median(
+            np.concatenate([image[0, :], image[-1, :], image[:, 0], image[:, -1]], axis=0),
+            axis=0,
+        )
+        return cv2.warpAffine(
+            image,
+            matrix,
+            (new_width, new_height),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=tuple(int(value) for value in border),
+        )
 
     # ------------------------------------------------------------------
     # Mask selection

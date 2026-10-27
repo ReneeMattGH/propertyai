@@ -368,7 +368,47 @@ function findWalkPath(scene, target) {
     waypoints.push(points[next])
     anchor = next
   }
-  return { waypoints, cells: points.length }
+  // Route explicitly through the centre of every doorway the line crosses so
+  // the walker squares up with the opening instead of cutting a jamb.
+  const routed = []
+  let previous = points[0]
+  for (const waypoint of waypoints) {
+    for (const crossing of doorCrossings(scene, previous, waypoint)) {
+      if (
+        segmentClear(previous, crossing, boxes) &&
+        segmentClear(crossing, waypoint, boxes)
+      ) {
+        routed.push({ x: crossing.x, z: crossing.z })
+        previous = crossing
+      }
+    }
+    routed.push(waypoint)
+    previous = waypoint
+  }
+  return { waypoints: routed, cells: points.length }
+}
+
+function doorCrossings(scene, from, to) {
+  const crossings = []
+  for (const door of scene.collision.doors ?? []) {
+    const [centerX, centerZ] = door.position ?? []
+    const width = Number(door.width_m ?? 0)
+    if (!Number.isFinite(centerX) || !Number.isFinite(centerZ) || width <= 0) continue
+    const horizontal = door.orientation === 'horizontal'
+    const lineStart = horizontal ? from.z : from.x
+    const lineEnd = horizontal ? to.z : to.x
+    const lineValue = horizontal ? centerZ : centerX
+    if ((lineStart - lineValue) * (lineEnd - lineValue) >= 0) continue
+    const ratio = (lineValue - lineStart) / (lineEnd - lineStart)
+    const runStart = horizontal ? from.x : from.z
+    const runEnd = horizontal ? to.x : to.z
+    const runValue = runStart + (runEnd - runStart) * ratio
+    if (Math.abs(runValue - (horizontal ? centerX : centerZ)) > width / 2 - 0.02) {
+      continue
+    }
+    crossings.push({ x: centerX, z: centerZ, ratio })
+  }
+  return crossings.sort((left, right) => left.ratio - right.ratio)
 }
 
 async function walkTo(page, target, timeoutMs = 15000) {
@@ -394,7 +434,10 @@ async function walkTo(page, target, timeoutMs = 15000) {
       const dx = target.x - state.x
       const dz = target.z - state.z
       const remaining = Math.hypot(dx, dz)
-      if (remaining < 0.3) break
+      // Doorways leave roughly 0.16 m of lateral tolerance for the player
+      // capsule; stopping 0.3 m short lets the walker drift off-centre and
+      // press into the jamb, so the waypoint tolerance must be tighter.
+      if (remaining < 0.15) break
       if (remaining < closest - 0.04) {
         closest = remaining
         progressAt = Date.now()
@@ -404,8 +447,8 @@ async function walkTo(page, target, timeoutMs = 15000) {
       const alongForward = dx * forward.x + dz * forward.z
       const alongRight = dx * right.x + dz * right.z
       const next = new Set()
-      if (Math.abs(alongForward) > 0.2) next.add(alongForward > 0 ? 'KeyW' : 'KeyS')
-      if (Math.abs(alongRight) > 0.2) next.add(alongRight > 0 ? 'KeyD' : 'KeyA')
+      if (Math.abs(alongForward) > 0.05) next.add(alongForward > 0 ? 'KeyW' : 'KeyS')
+      if (Math.abs(alongRight) > 0.05) next.add(alongRight > 0 ? 'KeyD' : 'KeyA')
       if (next.size === 0) break
       await setKeys(next)
       await page.waitForTimeout(110)
@@ -638,7 +681,25 @@ async function verifyProperty(jobId, { planPath, expectedTypes, requiredAssets, 
   const glb = await fetchSceneAsset(jobId)
   assert.ok(glb.buffer.length > 50_000, 'GLB should contain real mesh geometry')
   assert.ok(glb.json.meshes?.length > 0)
-  assert.equal(glb.json.images?.length ?? 0, 0, 'Floor-plan-only scenes must not fake photo textures')
+  const method = scene.manifest?.method ?? {}
+  assert.equal(
+    method.textures?.applied ?? false,
+    false,
+    'Floor-plan-only scenes must not use uploaded photo textures',
+  )
+  assert.deepEqual(method.textures?.sources ?? [], [])
+  const texturedMaterials = (glb.json.materials ?? []).filter(
+    (material) => material.pbrMetallicRoughness?.baseColorTexture,
+  )
+  assert.deepEqual(
+    texturedMaterials.filter((material) => !/^arch_/.test(material.name ?? '')),
+    [],
+    'Only generated architectural surfaces may carry textures',
+  )
+  assert.ok(
+    texturedMaterials.length > 0,
+    'Architectural surfaces should use generated PBR textures',
+  )
   const nodeNames = glb.json.nodes.map((node) => node.name ?? '')
   const glbFurnitureIds = new Set()
   for (const name of nodeNames) {
@@ -887,7 +948,7 @@ async function main() {
     assert.ok(Math.abs(start.y - 1.65) < 0.05, `Eye height should be 1.65 m, got ${start.y}`)
     const header = await page.locator('body').innerText()
     assert.match(header, /4 rooms/)
-    assert.match(header, new RegExp(`${firstJob.furniture_count} furniture items`))
+    assert.match(header, new RegExp(`${firstJob.furniture_count} furniture\\b`))
     assert.match(header, /Scandinavian style/i)
     assert.match(header, /Measured dimensions/)
     assert.match(header, /All rooms reachable/)
@@ -907,20 +968,22 @@ async function main() {
     const startNode = firstScene.room_graph.nodes.find((node) => node.id === startRoom.id)
     assert.equal((await page.getByTestId('current-room').innerText()).trim(), startNode.name)
     assert.ok(
-      (await page.getByText(`${startNode.furniture_count} furniture items`).count()) > 0,
+      new RegExp(`\\b${startNode.furniture_count} items?\\b`).test(
+        await page.getByTestId('room-info-overlay').innerText(),
+      ),
       'The overlay should report the furniture in the current room',
     )
     await page.screenshot({ path: path.join(screenshotDir, 'tour-initial.png') })
 
     // Hiding furniture must be reflected in the control and in the scene.
-    const furnitureToggle = page.getByRole('button', { name: 'Hide furniture' })
+    const furnitureToggle = page.getByRole('button', { name: 'Furniture on' })
     await furnitureToggle.click()
-    const showFurniture = page.getByRole('button', { name: 'Show furniture' })
+    const showFurniture = page.getByRole('button', { name: 'Furniture off' })
     await showFurniture.waitFor({ state: 'visible', timeout: 10000 })
     assert.equal(await showFurniture.getAttribute('aria-pressed'), 'false')
     await page.screenshot({ path: path.join(screenshotDir, 'tour-furniture-hidden.png') })
     await showFurniture.click()
-    await page.getByRole('button', { name: 'Hide furniture' }).waitFor({ state: 'visible' })
+    await page.getByRole('button', { name: 'Furniture on' }).waitFor({ state: 'visible' })
 
     // Walk a real collision-aware route through a doorway.
     const targetRoom = [...firstScene.room_graph.nodes]
@@ -976,7 +1039,7 @@ async function main() {
     const probe = chooseCollisionProbe(firstScene, startRoom.id)
     const probeCenter = itemCenter(probe)
     const probeBox = furnitureBox(probe)
-    await page.getByRole('button', { name: 'Reset', exact: true }).click()
+    await page.getByRole('button', { name: 'Reset view', exact: true }).click()
     await page.waitForTimeout(300)
     const visibleRun = await walkInto(page, probeCenter, 3200)
     const visibleClosest = Math.min(
@@ -987,8 +1050,8 @@ async function main() {
       `${probe.id} should block the player; closest approach ${visibleClosest.toFixed(3)} m`,
     )
 
-    await page.getByRole('button', { name: 'Hide furniture' }).click()
-    await page.getByRole('button', { name: 'Reset', exact: true }).click()
+    await page.getByRole('button', { name: 'Furniture on' }).click()
+    await page.getByRole('button', { name: 'Reset view', exact: true }).click()
     await page.waitForTimeout(300)
     const hiddenRun = await walkInto(page, probeCenter, 3200)
     const hiddenClosest = Math.min(
@@ -1002,8 +1065,8 @@ async function main() {
       hiddenClosest < visibleClosest - 0.15,
       'Furniture collision should measurably stop the player when visible',
     )
-    await page.getByRole('button', { name: 'Show furniture' }).click()
-    await page.getByRole('button', { name: 'Reset', exact: true }).click()
+    await page.getByRole('button', { name: 'Furniture off' }).click()
+    await page.getByRole('button', { name: 'Reset view', exact: true }).click()
     await page.waitForTimeout(300)
 
     // Walls still block movement when furniture is visible.
@@ -1185,7 +1248,7 @@ async function main() {
     assert.equal(secondState.jobId, secondId)
     const secondBody = await page.locator('body').innerText()
     assert.match(secondBody, /2 rooms/)
-    assert.match(secondBody, /Modern style/i)
+    assert.match(secondBody, /Modern Contemporary style/i)
     const secondSpawnRoom = roomAt(secondScene.collision.rooms, secondState.x, secondState.z)
     assert.ok(secondSpawnRoom)
     const secondTarget = secondScene.room_graph.nodes.find(

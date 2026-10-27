@@ -106,6 +106,24 @@ def create_four_room_plan(
     return path
 
 
+def rotate_plan(image: np.ndarray, angle_deg: float, background: int = 255) -> np.ndarray:
+    height, width = image.shape[:2]
+    matrix = cv2.getRotationMatrix2D((width / 2, height / 2), angle_deg, 1.0)
+    cos, sin = abs(matrix[0, 0]), abs(matrix[0, 1])
+    new_width = int(height * sin + width * cos)
+    new_height = int(height * cos + width * sin)
+    matrix[0, 2] += new_width / 2 - width / 2
+    matrix[1, 2] += new_height / 2 - height / 2
+    return cv2.warpAffine(
+        image,
+        matrix,
+        (new_width, new_height),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(background, background, background),
+    )
+
+
 def assert_room_geometry_is_consistent(result):
     assert result["status"] == "completed", result.get("error")
     assert result["rooms"]
@@ -261,6 +279,43 @@ def test_low_contrast_noisy_plan_is_still_parsed(tmp_path, cleanup_job_dirs):
 
     assert_room_geometry_is_consistent(result)
     assert len(result["rooms"]) >= 3
+
+
+def test_rotated_plan_is_straightened_and_parsed(tmp_path, cleanup_job_dirs):
+    """Slightly rotated scans must be deskewed instead of losing their walls.
+
+    Applying the detected angle alone can land thin anti-aliased walls on a
+    pixel boundary, so the parser probes small tilts and keeps the candidate
+    that actually resolves the rooms.
+    """
+    upright = cv2.imread(str(create_four_room_plan(tmp_path / "upright.png")))
+    for angle in (5.0, 11.0, 20.0):
+        plan = tmp_path / f"rotated_{int(angle)}.png"
+        cv2.imwrite(str(plan), rotate_plan(upright, angle))
+        _, result = parse(plan, cleanup_job_dirs)
+
+        assert_room_geometry_is_consistent(result)
+        assert len(result["rooms"]) == 4, (angle, result.get("segmentation"))
+        assert len(result["doorways"]) == 4, (angle, result.get("segmentation"))
+        deskew = result["segmentation"]["deskew_deg"]
+        assert abs(abs(deskew) - angle) <= 1.5, (angle, deskew)
+        assert result["deskew_deg"] == deskew
+        assert any("was rotated" in warning for warning in result["warnings"])
+        assert all(room.get("connected") for room in result["rooms"])
+
+
+def test_small_downscaled_plan_is_still_parsed(tmp_path, cleanup_job_dirs):
+    upright = cv2.imread(str(create_four_room_plan(tmp_path / "full_size.png")))
+    resized = cv2.resize(upright, None, fx=0.36, fy=0.36, interpolation=cv2.INTER_AREA)
+    assert min(resized.shape[:2]) >= 250
+    plan = tmp_path / "downscaled.png"
+    cv2.imwrite(str(plan), resized)
+    _, result = parse(plan, cleanup_job_dirs)
+
+    assert_room_geometry_is_consistent(result)
+    assert len(result["rooms"]) == 4, result.get("segmentation")
+    assert len(result["doorways"]) == 4
+    assert all(room.get("connected") for room in result["rooms"])
 
 
 def test_unusable_plan_fails_honestly_with_diagnostics(tmp_path, cleanup_job_dirs):
