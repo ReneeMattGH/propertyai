@@ -9,10 +9,13 @@ services:
     healthCheckPath: /health
     autoDeploy: true
     envVars:
+      # Replace this with the exact Vercel production URL once it exists.
       - key: FRONTEND_URLS
-        sync: false
+        value: http://localhost:3000,http://127.0.0.1:3000
+      # Allows the Vercel production and preview origins during the first
+      # deployment. Tighten this once the project domain is known.
       - key: FRONTEND_URL_REGEX
-        sync: false
+        value: 'https://[a-z0-9-]+\.vercel\.app'
       # Free instances have an ephemeral filesystem. Jobs and generated tours
       # survive normal requests but are lost when the instance restarts or
       # spins down. Attach a persistent disk and change this path on a paid
