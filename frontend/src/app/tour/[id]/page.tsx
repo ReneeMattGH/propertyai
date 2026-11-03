@@ -58,7 +58,6 @@ function TourViewerContent() {
   const [notFound, setNotFound] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showDetails, setShowDetails] = useState(false)
-  const [showFurnishing, setShowFurnishing] = useState(false)
   const [showRoomTypes, setShowRoomTypes] = useState(false)
   const [selectedStyle, setSelectedStyle] = useState('modern')
   const [actionError, setActionError] = useState<string | null>(null)
@@ -349,61 +348,18 @@ function TourViewerContent() {
             <h1 className="mt-1 truncate font-serif text-[21px] leading-tight text-ink">
               {job.project_name || 'Property walkthrough'}
             </h1>
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              <span className="chip chip-neutral">{job.room_count ?? 0} rooms</span>
-              <span className="chip chip-neutral">{job.furniture_count ?? 0} furniture</span>
-              <span className="chip chip-neutral">{styleLabel(job.furnishing_style)} style</span>
-              <span className="chip chip-neutral hidden sm:inline-flex">
-                {job.scale_verified ? 'Measured dimensions' : 'Estimated scale'}
-              </span>
-              <span className={job.navigation_available ? 'chip chip-success' : 'chip chip-warning'}>
-                {job.navigation_available ? 'All rooms reachable' : 'Partial navigation'}
-              </span>
-              {job.retry_count ? (
-                <span className="chip chip-neutral">retry {job.retry_count}</span>
-              ) : null}
-              {warnings.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setShowDetails(true)}
-                  className="chip chip-warning md:hidden"
-                >
-                  {warnings.length} warning{warnings.length === 1 ? '' : 's'}
-                </button>
-              )}
-            </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => setShowFurnishing((value) => !value)}
-              className={showFurnishing ? 'btn btn-secondary btn-sm' : 'btn btn-bronze btn-sm'}
-              aria-expanded={showFurnishing}
-            >
-              {showFurnishing ? 'Hide furnishing' : 'Furnishing'}
-            </button>
-            <button
-              onClick={() => setShowDetails((value) => !value)}
-              className="btn btn-secondary btn-sm"
-              aria-expanded={showDetails}
-            >
-              {showDetails ? 'Hide details' : 'Reconstruction details'}
-            </button>
-            <a
-              href={`${RECONSTRUCTION_URL}/reconstructions/${jobId}/report`}
-              target="_blank"
-              rel="noreferrer"
-              className="btn btn-secondary btn-sm hidden sm:inline-flex"
-            >
-              Validation report
-            </a>
-            <Link href="/create-tour" className="btn btn-primary btn-sm hidden sm:inline-flex">
-              New reconstruction
-            </Link>
-          </div>
+          <button
+            onClick={() => setShowDetails((value) => !value)}
+            className="btn btn-secondary btn-sm shrink-0"
+            aria-expanded={showDetails}
+          >
+            {showDetails ? 'Hide details' : 'Details'}
+          </button>
         </div>
       </header>
 
-      {showFurnishing && (
+      {showDetails && (
         <div className="border-b border-line bg-parchment/60 px-4 py-4 sm:px-6">
           <div className="grid gap-4 lg:grid-cols-2">
             <div
@@ -516,7 +472,7 @@ function TourViewerContent() {
 
       {showDetails && (
         <div className="border-b border-line bg-parchment/60 px-4 py-4 text-sm text-ink-soft sm:px-6">
-          <div className="mb-3 flex flex-wrap gap-2 md:hidden">
+          <div className="mb-3 flex flex-wrap gap-2">
             <a
               href={`${RECONSTRUCTION_URL}/reconstructions/${jobId}/report`}
               target="_blank"
@@ -604,13 +560,6 @@ function TourViewerContent() {
               </div>
             </div>
           </div>
-        </div>
-      )}
-
-      {warnings.length > 0 && !showDetails && (
-        <div className="hidden border-b border-warning/25 bg-warning/[0.08] px-4 py-2 text-[11px] text-warning sm:px-6 md:block">
-          {warnings[0]}
-          {warnings.length > 1 ? ` (+${warnings.length - 1} more in details)` : ''}
         </div>
       )}
 
