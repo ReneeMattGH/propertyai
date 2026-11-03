@@ -563,7 +563,7 @@ function TourViewerContent() {
         </div>
       )}
 
-      <div className="flex flex-1 items-center justify-center px-4 pb-5 sm:px-8 sm:pb-8">
+      <div className="flex flex-1 items-center justify-center bg-[#002105] px-4 py-6 sm:px-8 sm:py-8">
         <div className="relative aspect-video w-full max-w-[min(1180px,calc((100dvh_-_15.5rem)*16/9))] overflow-hidden rounded-[18px] border border-line bg-forest-deep shadow-lift">
           <GameEngine
             key={`${jobId}-${job.furnishing_style ?? 'modern'}-${job.furnishing_variant ?? 0}`}
