@@ -423,7 +423,7 @@ export default function GameEngine({ jobId }: GameEngineProps) {
   const [job, setJob] = useState<ReconstructionJob | null>(null)
   const [sceneBundle, setSceneBundle] = useState<SceneBundle | null>(null)
   const [attempt, setAttempt] = useState(0)
-  const [pointerLocked, setPointerLocked] = useState(false)
+  const [, setPointerLocked] = useState(false)
   const isTouch = useSyncExternalStore(
     subscribeCoarsePointer,
     coarsePointerSnapshot,
@@ -433,7 +433,6 @@ export default function GameEngine({ jobId }: GameEngineProps) {
   const [furnitureVisible, setFurnitureVisible] = useState(true)
   const [quality, setQuality] = useState<Quality>('medium')
   const [lighting, setLighting] = useState<LightingPreset>('daylight')
-  const [helpOpen, setHelpOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [fps, setFps] = useState<number | null>(null)
   const [renderStats, setRenderStats] = useState<RenderStats | null>(null)
@@ -629,9 +628,9 @@ export default function GameEngine({ jobId }: GameEngineProps) {
   }, [lighting, phase])
 
   useEffect(() => {
-    if (!helpOpen) return
+    if (!menuOpen) return
     setRenderStats(runtimeRef.current?.getStats() ?? null)
-  }, [helpOpen, phase, fps])
+  }, [menuOpen, phase, fps])
 
   useEffect(() => {
     if (phase === 'ready') return
@@ -654,30 +653,14 @@ export default function GameEngine({ jobId }: GameEngineProps) {
     setAttempt((value) => value + 1)
   }, [])
 
-  const meta = sceneBundle?.manifest
   const roomNodes = sceneBundle?.room_graph?.nodes ?? []
-  const rooms = roomNodes.length
   const currentRoom = roomNodes.find((node) => node.id === currentRoomId) ?? null
-  const currentFurniture = currentRoom?.furniture ?? []
-  const doors = sceneBundle?.collision?.doors.length ?? 0
-  const furnitureCount =
-    sceneBundle?.furniture?.length ?? sceneBundle?.collision?.furniture?.length ?? 0
-  const furnishingStyle = sceneBundle?.furnishing?.style ?? job?.furnishing_style ?? 'modern'
-  const approximate = job ? job.scale_verified === false : false
-  const showOverlay = phase !== 'ready'
+  const hudIcon =
+    'inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/12 bg-[#111713]/80 text-ivory/80 backdrop-blur-md transition hover:border-white/25 hover:text-ivory focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bronze/60 motion-reduce:transition-none'
+  const hudPill =
+    'inline-flex items-center justify-center rounded-full border border-white/12 bg-[#111713]/80 px-3 py-1.5 text-[10.5px] font-medium text-ivory/80 backdrop-blur-md transition hover:border-white/25 hover:text-ivory focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bronze/60 motion-reduce:transition-none'
 
-  const viewerControlProps = {
-    furnitureVisible,
-    ceilingVisible,
-    quality,
-    lighting,
-    onFurniture: () => setFurnitureVisible((value) => !value),
-    onCeiling: () => setCeilingVisible((value) => !value),
-    onQuality: setQuality,
-    onLighting: setLighting,
-    onReset: resetView,
-    onFullscreen: requestFullscreen,
-  }
+  const showOverlay = phase !== 'ready'
 
   return (
     <div
@@ -763,188 +746,151 @@ export default function GameEngine({ jobId }: GameEngineProps) {
 
       {phase === 'ready' && (
         <>
-          <div className="pointer-events-none absolute inset-0 z-20 flex items-start justify-between gap-3 p-3 sm:p-4">
-            <div className="pointer-events-auto flex max-h-full w-[min(21rem,calc(100vw-4.5rem))] flex-col gap-2.5 overflow-y-auto max-sm:w-[calc(100vw-7rem)]">
-              <div className="rounded-[12px] border border-white/10 bg-[#111713]/80 p-3.5 shadow-[0_24px_60px_-32px_rgba(0,0,0,0.95)] backdrop-blur-md max-sm:p-2.5">
-              <p className="hidden text-[9px] font-semibold uppercase tracking-[0.26em] text-bronze-soft sm:block">
-                Walkthrough
-              </p>
-              <h2 className="truncate font-serif text-[16px] leading-tight text-ivory sm:mt-1 sm:text-[19px]">
-                {job?.project_name || 'Property walkthrough'}
-              </h2>
-              <p className="mt-1 hidden text-[10.5px] leading-4 text-ivory/55 sm:block">
-                {rooms} room{rooms === 1 ? '' : 's'} · {furnitureCount} furniture · {doors} doorway
-                {doors === 1 ? '' : 's'}
-                {approximate ? ' · estimated scale' : ' · measured scale'}
-                {job?.navigation_available === false ? ' · partial navigation' : ''}
-              </p>
-              <div
-                className="mt-1.5 border-t border-white/10 pt-1.5 sm:mt-2.5 sm:pt-2.5"
-                data-testid="room-info-overlay"
-                data-room-id={currentRoom?.id ?? ''}
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-end p-3 sm:p-4">
+            <div className="pointer-events-auto flex items-center gap-2">
+              <button
+                onClick={() => setMenuOpen((value) => !value)}
+                className={hudIcon}
+                aria-expanded={menuOpen}
+                aria-label="Scene settings"
+                data-testid="hud-settings"
               >
-                <div className="flex items-baseline justify-between gap-2">
-                  <p className="hidden text-[9px] uppercase tracking-[0.2em] text-ivory/40 sm:block">
-                    Current room
-                  </p>
-                  {currentRoom?.area_m2 != null && (
-                    <p className="text-[9.5px] tabular-nums text-ivory/45 sm:text-[10px]">
-                      {Number(currentRoom.area_m2).toFixed(1)} m²
-                    </p>
-                  )}
-                </div>
-                <p
-                  className="mt-0.5 font-serif text-[15px] leading-tight text-ivory sm:text-[17px]"
-                  data-testid="current-room"
-                >
-                  {currentRoom?.name ?? 'Between rooms'}
-                </p>
-                {currentRoom ? (
-                  <p className="mt-0.5 text-[10px] text-ivory/55 first-letter:uppercase sm:text-[10.5px]">
-                    {`${
-                      currentRoom.room_type
-                        ? currentRoom.room_type.replace(/_/g, ' ')
-                        : 'unspecified type'
-                    } · ${currentFurniture.length} ${
-                      currentFurniture.length === 1 ? 'item' : 'items'
-                    }`}
-                  </p>
-                ) : (
-                  <p className="mt-0.5 text-[10px] text-ivory/45 sm:text-[10.5px]">
-                    Step into a room to see its details.
-                  </p>
-                )}
-                {currentRoom && currentFurniture.length > 0 && (
-                  <p className="mt-1 hidden text-[10px] leading-4 text-ivory/40 sm:block">
-                    {currentFurniture
-                      .slice(0, 5)
-                      .map((item) => item.label)
-                      .join(' · ')}
-                    {currentFurniture.length > 5 ? ` +${currentFurniture.length - 5}` : ''}
-                  </p>
-                )}
-                {currentRoom && currentFurniture.length === 0 && (
-                  <p className="mt-1 hidden text-[10px] leading-4 text-ivory/40 sm:block">
-                    Left minimal — items that would block a walkable route are skipped rather than
-                    forced.
-                  </p>
-                )}
-              </div>
-              </div>
-
-              {roomNodes.length > 1 && (
-                <div
-                  className="rounded-[12px] border border-white/10 bg-[#111713]/70 p-2 backdrop-blur-md"
-                  data-testid="room-rail"
-                >
-                  <p className="px-2 pb-1.5 pt-1 text-[9px] font-semibold uppercase tracking-[0.2em] text-ivory/35">
-                    Rooms
-                  </p>
-                  <ul className="max-h-[38vh] space-y-0.5 overflow-y-auto pr-0.5">
-                    {roomNodes.map((node) => {
-                      const active = node.id === currentRoomId
-                      return (
-                        <li key={node.id}>
-                          <button
-                            onClick={() => runtimeRef.current?.teleportToRoom(node.id)}
-                            aria-current={active ? 'location' : undefined}
-                            className={
-                              active
-                                ? 'flex w-full items-center justify-between gap-2 rounded-[7px] bg-white/10 px-2 py-1.5 text-left text-[11px] text-ivory'
-                                : 'flex w-full items-center justify-between gap-2 rounded-[7px] px-2 py-1.5 text-left text-[11px] text-ivory/55 transition hover:bg-white/[0.06] hover:text-ivory/85 motion-reduce:transition-none'
-                            }
-                          >
-                            <span className="truncate">{node.name || `Room ${node.id + 1}`}</span>
-                            {node.area_m2 != null && (
-                              <span className="shrink-0 text-[9px] tabular-nums text-ivory/35">
-                                {Number(node.area_m2).toFixed(0)} m²
-                              </span>
-                            )}
-                          </button>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </div>
-              )}
-            </div>
-
-            <div className="pointer-events-auto flex max-w-[58%] flex-col items-end gap-2">
-              <div className="hidden max-w-full md:block">
-                <ViewerControls {...viewerControlProps} />
-              </div>
-              <div className="flex items-center gap-1.5 md:hidden">
-                <button
-                  onClick={() => setMenuOpen((value) => !value)}
-                  className="inline-flex items-center rounded-full border border-white/12 bg-[#111713]/80 px-3 py-1.5 text-[11px] font-medium text-ivory/85 backdrop-blur-md transition hover:border-white/25 hover:text-ivory motion-reduce:transition-none"
-                  aria-expanded={menuOpen}
-                >
-                  {menuOpen ? 'Close' : 'Options'}
-                </button>
-                <a
-                  href="/tours"
-                  className="inline-flex items-center rounded-full border border-white/12 bg-[#111713]/80 px-3 py-1.5 text-[11px] font-medium text-ivory/85 backdrop-blur-md transition hover:border-white/25 hover:text-ivory motion-reduce:transition-none"
-                >
-                  Exit
-                </a>
-              </div>
+                <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" aria-hidden="true">
+                  <circle cx="10" cy="10" r="2.6" stroke="currentColor" strokeWidth="1.3" />
+                  <path
+                    d="M10 2.4v2.1M10 15.5v2.1M17.6 10h-2.1M4.5 10H2.4M15.4 4.6l-1.5 1.5M6.1 13.9l-1.5 1.5M15.4 15.4l-1.5-1.5M6.1 6.1 4.6 4.6"
+                    stroke="currentColor"
+                    strokeWidth="1.3"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </button>
+              <button
+                onClick={requestFullscreen}
+                className={hudIcon}
+                aria-label="Fullscreen"
+                data-testid="hud-fullscreen"
+              >
+                <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" aria-hidden="true">
+                  <path
+                    d="M7.6 3.4H3.4v4.2M12.4 3.4h4.2v4.2M7.6 16.6H3.4v-4.2M12.4 16.6h4.2v-4.2"
+                    stroke="currentColor"
+                    strokeWidth="1.3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+              <select
+                value={currentRoom?.id ?? ''}
+                onChange={(event) => {
+                  const id = Number(event.target.value)
+                  if (Number.isFinite(id)) runtimeRef.current?.teleportToRoom(id)
+                }}
+                aria-label="Go to room"
+                data-testid="hud-room-select"
+                className="max-w-[13rem] truncate rounded-full border border-white/12 bg-[#111713]/80 px-3 py-1.5 text-[11px] text-ivory/85 outline-none backdrop-blur-md transition hover:border-white/25 focus-visible:ring-2 focus-visible:ring-bronze/60"
+              >
+                {roomNodes.map((node) => (
+                  <option key={node.id} value={node.id} className="text-ink">
+                    {node.name || `Room ${node.id + 1}`}
+                    {node.area_m2 != null ? ` · ${Number(node.area_m2).toFixed(0)} m²` : ''}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={resetView}
+                className={hudIcon}
+                aria-label="Reset view"
+                data-testid="hud-reset"
+              >
+                <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" aria-hidden="true">
+                  <path
+                    d="M15.6 8.2A5.8 5.8 0 1 0 10 15.8"
+                    stroke="currentColor"
+                    strokeWidth="1.3"
+                    strokeLinecap="round"
+                  />
+                  <path
+                    d="M16.2 4.2v4h-4"
+                    stroke="currentColor"
+                    strokeWidth="1.3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
             </div>
           </div>
 
           {menuOpen && (
-            <div className="pointer-events-auto absolute right-3 top-[7.5rem] z-20 w-[min(21rem,calc(100vw-1.5rem))] rounded-[12px] border border-white/10 bg-[#111713]/92 p-3 shadow-[0_28px_70px_-30px_rgba(0,0,0,0.95)] backdrop-blur-md md:hidden">
-              <ViewerControls {...viewerControlProps} compact />
-              {roomNodes.length > 1 && (
-                <div className="mt-2 border-t border-white/10 pt-2" data-testid="mobile-room-list">
-                  <p className="px-1 pb-1 text-[9px] font-semibold uppercase tracking-[0.2em] text-ivory/35">
-                    Rooms
-                  </p>
-                  <div className="grid grid-cols-2 gap-1">
-                    {roomNodes.map((node) => {
-                      const active = node.id === currentRoomId
-                      return (
-                        <button
-                          key={node.id}
-                          onClick={() => {
-                            runtimeRef.current?.teleportToRoom(node.id)
-                            setMenuOpen(false)
-                          }}
-                          aria-current={active ? 'location' : undefined}
-                          className={
-                            active
-                              ? 'truncate rounded-[7px] bg-white/12 px-2 py-1.5 text-left text-[10.5px] text-ivory'
-                              : 'truncate rounded-[7px] border border-white/8 px-2 py-1.5 text-left text-[10.5px] text-ivory/65'
-                          }
-                        >
-                          {node.name || `Room ${node.id + 1}`}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-              <a
-                href={`/tour/${jobId}`}
-                className="mt-1.5 flex items-center justify-center rounded-full border border-white/12 px-3 py-1.5 text-[11px] font-medium text-ivory/75 transition hover:border-white/30 hover:text-ivory motion-reduce:transition-none"
-              >
-                Reconstruction details
-              </a>
-            </div>
-          )}
-
-          {!isTouch && <div className="pointer-events-none absolute left-1/2 top-1/2 z-10 h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/45" />}
-
-          {!isTouch && !pointerLocked && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-16 z-10 flex justify-center px-4">
-              <div className="rounded-full border border-white/10 bg-[#111713]/75 px-4 py-2 text-center backdrop-blur-md">
-                <p className="text-[11px] font-medium text-ivory/85">
-                  Click the scene to look around · WASD to walk
-                </p>
+            <div
+              className="pointer-events-auto absolute right-3 top-[4.4rem] z-20 w-[min(19rem,calc(100vw-1.5rem))] rounded-[12px] border border-white/10 bg-[#111713]/94 p-3 shadow-[0_28px_70px_-30px_rgba(0,0,0,0.95)] backdrop-blur-md"
+              data-testid="hud-settings-panel"
+            >
+              <p className="px-1 pb-2 text-[9px] font-semibold uppercase tracking-[0.2em] text-ivory/35">
+                Lighting
+              </p>
+              <div className="flex overflow-hidden rounded-full border border-white/12">
+                {LIGHTING_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    onClick={() => setLighting(option.value)}
+                    aria-pressed={lighting === option.value}
+                    className={
+                      lighting === option.value
+                        ? 'flex-1 bg-bronze/25 px-2 py-1.5 text-[10.5px] font-medium text-ivory'
+                        : 'flex-1 px-2 py-1.5 text-[10.5px] text-ivory/50 transition hover:text-ivory/85 motion-reduce:transition-none'
+                    }
+                  >
+                    {option.label}
+                  </button>
+                ))}
               </div>
+              <div className="mt-3 grid grid-cols-2 gap-1.5">
+                <button
+                  onClick={() => setFurnitureVisible((value) => !value)}
+                  className={hudPill}
+                  aria-pressed={furnitureVisible}
+                >
+                  {furnitureVisible ? 'Furniture on' : 'Furniture off'}
+                </button>
+                <button
+                  onClick={() => setCeilingVisible((value) => !value)}
+                  className={hudPill}
+                  aria-pressed={ceilingVisible}
+                >
+                  {ceilingVisible ? 'Ceiling on' : 'Ceiling off'}
+                </button>
+              </div>
+              <label className="mt-2 flex items-center justify-between gap-2 rounded-full border border-white/12 bg-[#111713]/80 px-3 py-1.5 text-[10.5px] text-ivory/50">
+                <span>Quality</span>
+                <select
+                  value={quality}
+                  onChange={(event) => setQuality(event.target.value as Quality)}
+                  aria-label="Rendering quality"
+                  className="bg-transparent text-right text-[10.5px] font-medium text-ivory outline-none"
+                >
+                  {QUALITY_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value} className="text-ink">
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="mt-2.5 flex flex-wrap gap-x-3 gap-y-1 border-t border-white/10 px-1 pt-2 text-[9.5px] tabular-nums text-ivory/35">
+                {fps !== null && <span>{fps} fps</span>}
+                {renderStats && (
+                  <>
+                    <span>{renderStats.triangles.toLocaleString()} triangles</span>
+                    <span>{renderStats.drawCalls} draw calls</span>
+                  </>
+                )}
+              </p>
             </div>
           )}
 
-          {isTouch ? (
+          {isTouch && (
             <>
               <Joystick onChange={handleJoystick} />
               <div className="absolute bottom-10 right-4 z-10 flex flex-col items-stretch gap-2">
@@ -964,182 +910,11 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                   Reset
                 </button>
               </div>
-              <p className="pointer-events-none absolute bottom-44 left-4 z-10 w-32 rounded-full bg-[#111713]/60 px-3 py-1 text-center text-[10px] text-ivory/70 backdrop-blur">
-                Drag the scene to look around
-              </p>
             </>
-          ) : (
-            <div className="pointer-events-none absolute bottom-3 left-3 z-10 hidden rounded-full border border-white/10 bg-[#111713]/60 px-3 py-1.5 text-[10px] text-ivory/55 backdrop-blur sm:block">
-              WASD / arrows move · mouse look · Shift run · Space jump · R reset · Esc release
-            </div>
           )}
 
-          <div className="pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-2 rounded-full border border-white/10 bg-[#111713]/65 px-2.5 py-1.5 text-[10px] text-ivory/45 backdrop-blur">
-            {fps !== null && <span className="tabular-nums">{fps} fps</span>}
-            <button
-              onClick={() => setHelpOpen((value) => !value)}
-              className="pointer-events-auto text-ivory/75 underline decoration-white/30 decoration-dotted underline-offset-2 transition hover:text-ivory motion-reduce:transition-none"
-            >
-              Scene info
-            </button>
-          </div>
-
-          {helpOpen && (
-            <div className="absolute bottom-12 right-3 z-30 w-80 max-w-[calc(100%-1.5rem)] rounded-[12px] border border-white/10 bg-[#111713]/96 p-4 text-[11px] text-ivory/60 shadow-[0_32px_80px_-32px_rgba(0,0,0,0.95)] backdrop-blur-md">
-              <div className="flex items-start justify-between gap-3">
-                <p className="font-serif text-[17px] leading-tight text-ivory">
-                  About this reconstruction
-                </p>
-                <button
-                  onClick={() => setHelpOpen(false)}
-                  className="text-[10px] text-ivory/45 transition hover:text-ivory motion-reduce:transition-none"
-                  aria-label="Close scene information"
-                >
-                  Close
-                </button>
-              </div>
-              <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2">
-                <dt className="text-ivory/35">Rooms</dt>
-                <dd>{rooms}</dd>
-                <dt className="text-ivory/35">Furniture</dt>
-                <dd>{furnitureCount} items</dd>
-                <dt className="text-ivory/35">Doorways</dt>
-                <dd>{doors}</dd>
-                <dt className="text-ivory/35">Scale</dt>
-                <dd>{approximate ? 'Estimated from plan' : 'Measured dimensions'}</dd>
-                <dt className="text-ivory/35">Style</dt>
-                <dd className="capitalize">{furnishingStyle.replace(/_/g, ' ')}</dd>
-                <dt className="text-ivory/35">Lighting</dt>
-                <dd>{LIGHTING_PRESETS[lighting].label}</dd>
-                <dt className="text-ivory/35">Input</dt>
-                <dd>Floor plan only</dd>
-                <dt className="text-ivory/35">Geometry</dt>
-                <dd>{job?.geometry_valid ? 'Validated' : 'Not validated'}</dd>
-                <dt className="text-ivory/35">Navigation</dt>
-                <dd>{job?.navigation_available ? 'All rooms reachable' : 'Partial'}</dd>
-                <dt className="text-ivory/35">Current room</dt>
-                <dd data-testid="scene-info-room">{currentRoom?.name ?? 'Between rooms'}</dd>
-                <dt className="text-ivory/35">Room furniture</dt>
-                <dd>
-                  {currentRoom
-                    ? currentFurniture.length > 0
-                      ? currentFurniture.map((item) => item.label).join(', ')
-                      : 'None — room left minimal'
-                    : '—'}
-                </dd>
-              </dl>
-              {renderStats && (
-                <div className="mt-3 border-t border-white/10 pt-2.5">
-                  <p className="text-[9px] uppercase tracking-[0.18em] text-ivory/35">Renderer</p>
-                  <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] tabular-nums text-ivory/55">
-                    <span>{renderStats.drawCalls} draw calls</span>
-                    <span>{renderStats.triangles.toLocaleString()} triangles</span>
-                    <span>{renderStats.textures} textures</span>
-                    <span>{renderStats.programs} shaders</span>
-                    <span>{renderStats.fps} fps</span>
-                  </p>
-                </div>
-              )}
-              {(meta?.limitations?.length ?? 0) > 0 && (
-                <div className="mt-3 border-t border-white/10 pt-2.5">
-                  <p className="font-medium text-ivory/70">Limitations</p>
-                  <ul className="mt-1 list-disc space-y-1 pl-4 leading-4">
-                    {meta?.limitations?.map((limitation, index) => (
-                      <li key={`limitation-${index}`}>{limitation}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
         </>
       )}
-    </div>
-  )
-}
-
-interface ViewerControlsProps {
-  furnitureVisible: boolean
-  ceilingVisible: boolean
-  quality: Quality
-  lighting: LightingPreset
-  compact?: boolean
-  onFurniture: () => void
-  onCeiling: () => void
-  onQuality: (quality: Quality) => void
-  onLighting: (preset: LightingPreset) => void
-  onReset: () => void
-  onFullscreen: () => void
-}
-
-function ViewerControls({
-  furnitureVisible,
-  ceilingVisible,
-  quality,
-  lighting,
-  compact = false,
-  onFurniture,
-  onCeiling,
-  onQuality,
-  onLighting,
-  onReset,
-  onFullscreen,
-}: ViewerControlsProps) {
-  const pill =
-    'inline-flex items-center justify-center rounded-full border border-white/12 bg-[#111713]/80 px-3 py-1.5 text-[10.5px] font-medium text-ivory/80 backdrop-blur-md transition hover:border-white/25 hover:text-ivory focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bronze/60 motion-reduce:transition-none'
-  const activePill =
-    'inline-flex items-center justify-center rounded-full border border-bronze/60 bg-bronze/20 px-3 py-1.5 text-[10.5px] font-medium text-ivory backdrop-blur-md transition hover:border-bronze/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bronze/60 motion-reduce:transition-none'
-  return (
-    <div className={compact ? 'grid grid-cols-2 gap-1.5' : 'flex flex-wrap justify-end gap-1.5'}>
-      <div className="col-span-2 flex min-w-[10.5rem] overflow-hidden rounded-full border border-white/12 bg-[#111713]/80 backdrop-blur-md">
-        {LIGHTING_OPTIONS.map((option) => (
-          <button
-            key={option.value}
-            onClick={() => onLighting(option.value)}
-            aria-pressed={lighting === option.value}
-            className={
-              lighting === option.value
-                ? 'flex-1 bg-bronze/25 px-2 py-1.5 text-[10.5px] font-medium text-ivory'
-                : 'flex-1 px-2 py-1.5 text-[10.5px] text-ivory/50 transition hover:text-ivory/85 motion-reduce:transition-none'
-            }
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-      <button onClick={onFurniture} className={pill} aria-pressed={furnitureVisible}>
-        {furnitureVisible ? 'Furniture on' : 'Furniture off'}
-      </button>
-      <button onClick={onCeiling} className={pill} aria-pressed={ceilingVisible}>
-        {ceilingVisible ? 'Ceiling on' : 'Ceiling off'}
-      </button>
-      <label
-        className={`${pill} cursor-pointer gap-1.5`}
-        title="Rendering quality"
-      >
-        <span className="text-ivory/40">Quality</span>
-        <select
-          value={quality}
-          onChange={(event) => onQuality(event.target.value as Quality)}
-          className="bg-transparent text-[10.5px] font-medium text-ivory outline-none"
-          aria-label="Rendering quality"
-        >
-          {QUALITY_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value} className="text-ink">
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      <button onClick={onReset} className={activePill}>
-        Reset view
-      </button>
-      <button onClick={onFullscreen} className={pill}>
-        Fullscreen
-      </button>
-      <a href="/tours" className={pill}>
-        Exit
-      </a>
     </div>
   )
 }
