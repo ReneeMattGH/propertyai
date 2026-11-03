@@ -763,8 +763,9 @@ export default function GameEngine({ jobId }: GameEngineProps) {
 
       {phase === 'ready' && (
         <>
-          <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-3 p-3 sm:p-4">
-            <div className="pointer-events-auto w-[min(21rem,calc(100vw-4.5rem))] rounded-[12px] border border-white/10 bg-[#111713]/80 p-3.5 shadow-[0_24px_60px_-32px_rgba(0,0,0,0.95)] backdrop-blur-md max-sm:w-[calc(100vw-7rem)] max-sm:p-2.5">
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-start justify-between gap-3 p-3 sm:p-4">
+            <div className="pointer-events-auto flex max-h-full w-[min(21rem,calc(100vw-4.5rem))] flex-col gap-2.5 overflow-y-auto max-sm:w-[calc(100vw-7rem)]">
+              <div className="rounded-[12px] border border-white/10 bg-[#111713]/80 p-3.5 shadow-[0_24px_60px_-32px_rgba(0,0,0,0.95)] backdrop-blur-md max-sm:p-2.5">
               <p className="hidden text-[9px] font-semibold uppercase tracking-[0.26em] text-bronze-soft sm:block">
                 Walkthrough
               </p>
@@ -829,6 +830,43 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                   </p>
                 )}
               </div>
+              </div>
+
+              {roomNodes.length > 1 && (
+                <div
+                  className="rounded-[12px] border border-white/10 bg-[#111713]/70 p-2 backdrop-blur-md"
+                  data-testid="room-rail"
+                >
+                  <p className="px-2 pb-1.5 pt-1 text-[9px] font-semibold uppercase tracking-[0.2em] text-ivory/35">
+                    Rooms
+                  </p>
+                  <ul className="max-h-[38vh] space-y-0.5 overflow-y-auto pr-0.5">
+                    {roomNodes.map((node) => {
+                      const active = node.id === currentRoomId
+                      return (
+                        <li key={node.id}>
+                          <button
+                            onClick={() => runtimeRef.current?.teleportToRoom(node.id)}
+                            aria-current={active ? 'location' : undefined}
+                            className={
+                              active
+                                ? 'flex w-full items-center justify-between gap-2 rounded-[7px] bg-white/10 px-2 py-1.5 text-left text-[11px] text-ivory'
+                                : 'flex w-full items-center justify-between gap-2 rounded-[7px] px-2 py-1.5 text-left text-[11px] text-ivory/55 transition hover:bg-white/[0.06] hover:text-ivory/85 motion-reduce:transition-none'
+                            }
+                          >
+                            <span className="truncate">{node.name || `Room ${node.id + 1}`}</span>
+                            {node.area_m2 != null && (
+                              <span className="shrink-0 text-[9px] tabular-nums text-ivory/35">
+                                {Number(node.area_m2).toFixed(0)} m²
+                              </span>
+                            )}
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              )}
             </div>
 
             <div className="pointer-events-auto flex max-w-[58%] flex-col items-end gap-2">
@@ -891,44 +929,6 @@ export default function GameEngine({ jobId }: GameEngineProps) {
               >
                 Reconstruction details
               </a>
-            </div>
-          )}
-
-          {roomNodes.length > 1 && (
-            <div
-              className="pointer-events-none absolute left-4 top-1/2 z-20 hidden -translate-y-1/2 lg:block"
-              data-testid="room-rail"
-            >
-              <div className="pointer-events-auto w-44 rounded-[12px] border border-white/10 bg-[#111713]/70 p-2 backdrop-blur-md">
-                <p className="px-2 pb-1.5 pt-1 text-[9px] font-semibold uppercase tracking-[0.2em] text-ivory/35">
-                  Rooms
-                </p>
-                <ul className="max-h-[52vh] space-y-0.5 overflow-y-auto pr-0.5">
-                  {roomNodes.map((node) => {
-                    const active = node.id === currentRoomId
-                    return (
-                      <li key={node.id}>
-                        <button
-                          onClick={() => runtimeRef.current?.teleportToRoom(node.id)}
-                          aria-current={active ? 'location' : undefined}
-                          className={
-                            active
-                              ? 'flex w-full items-center justify-between gap-2 rounded-[7px] bg-white/10 px-2 py-1.5 text-left text-[11px] text-ivory'
-                              : 'flex w-full items-center justify-between gap-2 rounded-[7px] px-2 py-1.5 text-left text-[11px] text-ivory/55 transition hover:bg-white/[0.06] hover:text-ivory/85 motion-reduce:transition-none'
-                          }
-                        >
-                          <span className="truncate">{node.name || `Room ${node.id + 1}`}</span>
-                          {node.area_m2 != null && (
-                            <span className="shrink-0 text-[9px] tabular-nums text-ivory/35">
-                              {Number(node.area_m2).toFixed(0)} m²
-                            </span>
-                          )}
-                        </button>
-                      </li>
-                    )
-                  })}
-                </ul>
-              </div>
             </div>
           )}
 
@@ -1236,7 +1236,10 @@ async function buildRuntime(
   }
 
   renderer.setPixelRatio(qualityPixelRatio(options.quality))
-  renderer.setSize(container.clientWidth, container.clientHeight)
+  // updateStyle stays false on purpose: the canvas is sized by h-full w-full, so an
+  // inline pixel size here would freeze the view at its initial height and leave the
+  // rest of the container black.
+  renderer.setSize(container.clientWidth, container.clientHeight, false)
   renderer.outputColorSpace = THREE.SRGBColorSpace
   renderer.toneMapping = THREE.ACESFilmicToneMapping
   renderer.toneMappingExposure = LIGHTING_PRESETS[options.lighting].exposure

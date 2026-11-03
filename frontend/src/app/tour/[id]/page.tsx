@@ -337,7 +337,7 @@ function TourViewerContent() {
   const roomTypes = job.room_types ?? []
 
   return (
-    <div className="flex min-h-screen flex-col bg-ivory">
+    <div className="flex min-h-dvh flex-col bg-ivory">
       <Navigation />
 
       <header className="border-b border-line bg-surface">
@@ -614,7 +614,7 @@ function TourViewerContent() {
         </div>
       )}
 
-      <div className="relative min-h-[58vh] flex-1 bg-forest-deep sm:min-h-[70vh]">
+      <div className="relative min-h-[45vh] flex-1 bg-forest-deep">
         <GameEngine
           key={`${jobId}-${job.furnishing_style ?? 'modern'}-${job.furnishing_variant ?? 0}`}
           jobId={jobId}
