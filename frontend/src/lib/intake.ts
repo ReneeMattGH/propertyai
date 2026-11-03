@@ -55,6 +55,12 @@ export interface IntakeProject {
   referenceProjects?: string
 }
 
+export interface IntakeDelivery {
+  sent_at: string
+  portal_http_status: number
+  response: Record<string, unknown>
+}
+
 export interface IntakeRequestSummary {
   request_id: string
   project_id: string
@@ -68,6 +74,7 @@ export interface IntakeRequestSummary {
   plans_ready: boolean
   file_count: number
   build: IntakeBuild | null
+  delivery: IntakeDelivery | null
   issues: string[]
 }
 
@@ -127,6 +134,16 @@ export function startIntakeBuild(
 
 export function ignoreIntakeRequest(requestId: string): Promise<{ request: IntakeRequestSummary }> {
   return requestJson(intakePath(`/${encodeURIComponent(requestId)}/ignore`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  })
+}
+
+export function deliverIntakeRequest(
+  requestId: string,
+): Promise<{ ok: boolean; portal: Record<string, unknown>; request: IntakeRequestSummary }> {
+  return requestJson(intakePath(`/${encodeURIComponent(requestId)}/deliver`), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({}),

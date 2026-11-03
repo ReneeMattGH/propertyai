@@ -9,6 +9,7 @@ import {
   type ReconstructionJob,
 } from '@/lib/reconstruction'
 import {
+  deliverIntakeRequest,
   fetchIntakeRequest,
   fetchIntakeRequests,
   ignoreIntakeRequest,
@@ -101,7 +102,7 @@ function RequestDetail({
   const [detail, setDetail] = useState<IntakeRequestDetail | null>(null)
   const [job, setJob] = useState<ReconstructionJob | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState<'' | 'build' | 'archive' | 'send'>('')
   const [width, setWidth] = useState('')
   const [length, setLength] = useState('')
   const [style, setStyle] = useState<string>('modern')
@@ -163,7 +164,7 @@ function RequestDetail({
   const refresh = () => setReloadTick((tick) => tick + 1)
 
   const onBuild = async () => {
-    setBusy(true)
+    setBusy('build')
     setError(null)
     try {
       await startIntakeBuild(requestId, {
@@ -177,12 +178,12 @@ function RequestDetail({
     } catch (caught) {
       setError(messageOf(caught))
     } finally {
-      setBusy(false)
+      setBusy('')
     }
   }
 
   const onIgnore = async () => {
-    setBusy(true)
+    setBusy('archive')
     try {
       await ignoreIntakeRequest(requestId)
       refresh()
@@ -190,7 +191,21 @@ function RequestDetail({
     } catch (caught) {
       setError(messageOf(caught))
     } finally {
-      setBusy(false)
+      setBusy('')
+    }
+  }
+
+  const onDeliver = async () => {
+    setBusy('send')
+    setError(null)
+    try {
+      await deliverIntakeRequest(requestId)
+      refresh()
+      onChanged()
+    } catch (caught) {
+      setError(messageOf(caught))
+    } finally {
+      setBusy('')
     }
   }
 
@@ -299,14 +314,40 @@ function RequestDetail({
                   : 'Job link established'}
               </p>
             </div>
-            {activeJob && TERMINAL_JOB_STATUSES.has(activeJob.status) ? (
-              activeJob.status === 'completed' ? (
-                <Link href={`/tour/${activeJob.job_id}`} className="btn btn-primary btn-sm">
-                  Open walkthrough
+            {activeJob?.status === 'completed' ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <Link href={`/tour/${activeJob.job_id}`} className="btn btn-secondary btn-sm">
+                  Preview walkthrough
                 </Link>
-              ) : (
-                <span className="chip chip-warning">{activeJob.status}</span>
-              )
+                {detail.delivery ? (
+                  detail.delivery.portal_http_status === 200 ? (
+                    <span className="chip chip-success">Sent to client</span>
+                  ) : (
+                    <>
+                      <span className="chip chip-warning">Last send failed</span>
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={onDeliver}
+                        disabled={busy !== ''}
+                      >
+                        Send to client again
+                      </button>
+                    </>
+                  )
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={onDeliver}
+                    disabled={busy !== ''}
+                  >
+                    {busy === 'send' ? 'Sending…' : 'Send to client'}
+                  </button>
+                )}
+              </div>
+            ) : activeJob && TERMINAL_JOB_STATUSES.has(activeJob.status) ? (
+              <span className="chip chip-warning">{activeJob.status}</span>
             ) : null}
           </div>
           {activeJob && !TERMINAL_JOB_STATUSES.has(activeJob.status) ? (
@@ -412,11 +453,11 @@ function RequestDetail({
               type="button"
               className="btn btn-primary btn-sm"
               onClick={onBuild}
-              disabled={busy || plans.length === 0}
+              disabled={busy !== '' || plans.length === 0}
             >
               Build this plan
             </button>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={onIgnore} disabled={busy}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={onIgnore} disabled={busy !== ''}>
               Archive request
             </button>
           </div>

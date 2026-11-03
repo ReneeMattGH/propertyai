@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 from urllib.parse import urlsplit
+from urllib.error import HTTPError
 from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request
@@ -31,6 +32,7 @@ from fastapi.responses import FileResponse
 
 MAX_FILE_BYTES = 15 * 1024 * 1024
 DOWNLOAD_TIMEOUT_S = 12
+DELIVERY_TIMEOUT_S = 45
 ALLOWED_HOST_SUFFIX = ".supabase.co"
 PLAN_EXTENSIONS = {".png", ".jpg", ".jpeg", ".pdf"}
 TERMINAL_BUILD_STATUSES = {"ignored"}
@@ -117,6 +119,7 @@ def build_intake_router(
     data_dir: Path,
     start_build: Callable[..., Awaitable[Dict[str, Any]]],
     valid_styles: tuple,
+    get_job: Callable[[str], Optional[Dict[str, Any]]],
 ) -> APIRouter:
     intake_dir = data_dir / "intake"
     store_path = data_dir / "requests.json"
@@ -168,6 +171,7 @@ def build_intake_router(
             "plans_ready": any(entry.get("stored") for entry in plans),
             "file_count": len(files),
             "build": record.get("build"),
+            "delivery": record.get("delivery"),
             "issues": record.get("issues", []),
         }
 
@@ -401,6 +405,87 @@ def build_intake_router(
             store[request_id] = record
             _write_store(store_path, store)
         return {"ok": True, "request": summary(record)}
+
+    @router.post("/intake/requests/{request_id}/deliver")
+    async def deliver_request(request_id: str):
+        portal = os.environ.get("CRESTION_PORTAL_URL", "").strip().rstrip("/")
+        if not portal:
+            raise HTTPException(
+                status_code=503,
+                detail="The client portal isn't configured. Set CRESTION_PORTAL_URL on the engine.",
+            )
+        secret = _secret()
+        if not secret:
+            raise HTTPException(status_code=503, detail="Set PRODUCTION_BACKEND_SECRET on the engine.")
+
+        with _LOCK:
+            record = _read_store(store_path).get(request_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="Submission not found.")
+        job_id = (record.get("build") or {}).get("job_id")
+        if not job_id:
+            raise HTTPException(status_code=422, detail="Nothing has been built for this submission yet.")
+        job = get_job(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="The reconstruction for this submission is gone.")
+
+        payload = {
+            "version": 1,
+            "portal": "crestionlabs",
+            "projectId": record["project_id"],
+            "requestId": request_id,
+            "jobId": job_id,
+            "engineStatus": job.get("status"),
+            "stage": job.get("stage_label"),
+            "error": job.get("error"),
+            "deliveredAt": _now(),
+        }
+        body = json.dumps(payload).encode()
+        signature = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+        request = UrlRequest(
+            f"{portal}/api/production/deliver",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Crestion-Signature": f"sha256={signature}",
+                "User-Agent": "crestion-labs-engine/1",
+            },
+            method="POST",
+        )
+
+        try:
+            with urlopen(request, timeout=DELIVERY_TIMEOUT_S) as response:
+                code = response.status
+                result = json.loads(response.read().decode())
+        except HTTPError as exc:
+            code = exc.code
+            result = {"message": exc.read().decode(errors="replace")[:400]}
+        except Exception as exc:
+            code = 0
+            result = {"message": f"The portal could not be reached: {exc}"}
+
+        current = None
+        with _LOCK:
+            store = _read_store(store_path)
+            current = store.get(request_id)
+            if current:
+                current["delivery"] = {
+                    "sent_at": _now(),
+                    "portal_http_status": code,
+                    "response": result,
+                }
+                if code == 200 and result.get("delivered"):
+                    current["status"] = "delivered"
+                current["updated_at"] = _now()
+                store[request_id] = current
+                _write_store(store_path, store)
+
+        if code != 200:
+            raise HTTPException(
+                status_code=502,
+                detail=result.get("message", "The portal rejected this delivery."),
+            )
+        return {"ok": True, "portal": result, "request": summary(current or record)}
 
     return router
 

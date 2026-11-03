@@ -3727,11 +3727,18 @@ async def _intake_start_build(
 from furniture_assets import STYLES as INTAKE_STYLES
 from intake import build_intake_router
 
+
+def _intake_get_job(job_id: str):
+    job = get_job(job_id)
+    return _public_job(job) if job else None
+
+
 app.include_router(
     build_intake_router(
         data_dir=DATA_DIR,
         start_build=_intake_start_build,
         valid_styles=INTAKE_STYLES,
+        get_job=_intake_get_job,
     )
 )
 
