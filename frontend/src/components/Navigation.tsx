@@ -15,6 +15,7 @@ const supabaseConfigured =
 
 const links = [
   { href: '/dashboard', label: 'Dashboard', match: ['/dashboard'] },
+  { href: '/requests', label: 'Requests', match: ['/requests'] },
   { href: '/tours', label: 'Walkthroughs', match: ['/tours', '/tour'] },
 ] as const
 

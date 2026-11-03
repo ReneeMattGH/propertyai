@@ -21,6 +21,8 @@ Endpoints:
   GET  /reconstructions/{id}/logs              human-readable job log
   POST /reconstructions/{id}/cancel            request cancellation
   POST /reconstructions/{id}/retry             retry a failed/cancelled job
+  POST /intake/requests                        receive a signed Crestion Labs submission
+  GET  /intake/requests                        list client submissions awaiting production
 
 The pipeline runs in background tasks and CPU-bound stages are offloaded to
 worker threads so the HTTP API stays responsive. The legacy photo-review
@@ -3687,6 +3689,51 @@ async def get_job_logs(job_id: str, tail: int = 60):
         return {"job_id": job_id, "lines": []}
     lines = log_path.read_text(encoding="utf-8").splitlines()
     return {"job_id": job_id, "lines": lines[-max(1, min(tail, 500)):]}
+
+
+class _StoredPlanUpload:
+    """Wraps an on-disk plan so intake submissions reuse the upload code path."""
+
+    def __init__(self, file_handle, filename: str):
+        self.file = file_handle
+        self.filename = filename
+
+
+async def _intake_start_build(
+    background_tasks: BackgroundTasks,
+    *,
+    file_handle,
+    filename: str,
+    project_name: str,
+    style: str,
+    num_floors: int,
+    known_width: Optional[float],
+    known_length: Optional[float],
+    property_id: str,
+):
+    return await create_reconstruction(
+        background_tasks,
+        project_name=project_name,
+        floor_plan=_StoredPlanUpload(file_handle, filename),
+        num_floors=num_floors,
+        known_width=known_width,
+        known_length=known_length,
+        style=style,
+        property_id=property_id,
+        photos=None,
+    )
+
+
+from furniture_assets import STYLES as INTAKE_STYLES
+from intake import build_intake_router
+
+app.include_router(
+    build_intake_router(
+        data_dir=DATA_DIR,
+        start_build=_intake_start_build,
+        valid_styles=INTAKE_STYLES,
+    )
+)
 
 
 if __name__ == "__main__":

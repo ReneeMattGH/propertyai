@@ -409,7 +409,7 @@ export interface FurnishingUpdate {
   regenerate?: boolean
 }
 
-async function errorMessage(response: Response): Promise<string> {
+export async function errorMessage(response: Response): Promise<string> {
   try {
     const body = await response.json()
     if (typeof body?.detail === 'string') return body.detail

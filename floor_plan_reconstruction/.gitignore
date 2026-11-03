@@ -9,3 +9,8 @@ photos/
 geometry/
 output/
 logs/
+
+# Crestion Labs intake state: submission records and stored client plans.
+# requests.json contains client contact details, so it must never be committed.
+requests.json
+intake/
