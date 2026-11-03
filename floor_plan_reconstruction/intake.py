@@ -263,12 +263,14 @@ def build_intake_router(
         return {"ok": True, "deduplicated": False, "request": summary(record)}
 
     @router.get("/intake/requests")
-    async def list_requests(status: Optional[str] = None, limit: int = 100):
+    async def list_requests(status: Optional[str] = None, project_id: Optional[str] = None, limit: int = 100):
         with _LOCK:
             store = _read_store(store_path)
         records = sorted(store.values(), key=lambda item: item.get("received_at", ""), reverse=True)
         if status:
             records = [record for record in records if record.get("status") == status]
+        if project_id:
+            records = [record for record in records if record.get("project_id") == project_id]
         counts: Dict[str, int] = {}
         for record in store.values():
             counts[record.get("status", "new")] = counts.get(record.get("status", "new"), 0) + 1
