@@ -746,8 +746,8 @@ export default function GameEngine({ jobId }: GameEngineProps) {
 
       {phase === 'ready' && (
         <>
-          <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-end p-3 sm:p-4">
-            <div className="pointer-events-auto flex items-center gap-2">
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-end p-4 sm:p-5">
+            <div className="pointer-events-auto flex items-center gap-3">
               <button
                 onClick={() => setMenuOpen((value) => !value)}
                 className={hudIcon}
@@ -825,10 +825,10 @@ export default function GameEngine({ jobId }: GameEngineProps) {
 
           {menuOpen && (
             <div
-              className="pointer-events-auto absolute right-3 top-[4.4rem] z-20 w-[min(19rem,calc(100vw-1.5rem))] rounded-[12px] border border-white/10 bg-[#111713]/94 p-3 shadow-[0_28px_70px_-30px_rgba(0,0,0,0.95)] backdrop-blur-md"
+              className="pointer-events-auto absolute right-4 top-[4.9rem] z-20 w-[min(19rem,calc(100vw-2rem))] rounded-[14px] border border-white/10 bg-[#111713]/94 p-3.5 shadow-[0_28px_70px_-30px_rgba(0,0,0,0.95)] backdrop-blur-md sm:right-5"
               data-testid="hud-settings-panel"
             >
-              <p className="px-1 pb-2 text-[9px] font-semibold uppercase tracking-[0.2em] text-ivory/35">
+              <p className="px-1 pb-2.5 text-[9px] font-semibold uppercase tracking-[0.2em] text-ivory/35">
                 Lighting
               </p>
               <div className="flex overflow-hidden rounded-full border border-white/12">
@@ -847,7 +847,7 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                   </button>
                 ))}
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-1.5">
+              <div className="mt-4 grid grid-cols-2 gap-2">
                 <button
                   onClick={() => setFurnitureVisible((value) => !value)}
                   className={hudPill}
@@ -863,7 +863,7 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                   {ceilingVisible ? 'Ceiling on' : 'Ceiling off'}
                 </button>
               </div>
-              <label className="mt-2 flex items-center justify-between gap-2 rounded-full border border-white/12 bg-[#111713]/80 px-3 py-1.5 text-[10.5px] text-ivory/50">
+              <label className="mt-3 flex items-center justify-between gap-2 rounded-full border border-white/12 bg-[#111713]/80 px-3.5 py-2 text-[10.5px] text-ivory/50">
                 <span>Quality</span>
                 <select
                   value={quality}
@@ -878,7 +878,7 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                   ))}
                 </select>
               </label>
-              <p className="mt-2.5 flex flex-wrap gap-x-3 gap-y-1 border-t border-white/10 px-1 pt-2 text-[9.5px] tabular-nums text-ivory/35">
+              <p className="mt-4 flex flex-wrap gap-x-3 gap-y-1 border-t border-white/10 px-1 pt-3 text-[9.5px] tabular-nums text-ivory/35">
                 {fps !== null && <span>{fps} fps</span>}
                 {renderStats && (
                   <>

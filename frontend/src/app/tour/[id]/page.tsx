@@ -340,18 +340,18 @@ function TourViewerContent() {
       <Navigation />
 
       <header className="border-b border-line bg-surface">
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-4 px-4 py-5 sm:px-8 sm:py-6">
           <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-bronze">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-bronze">
               Walkthrough
             </p>
-            <h1 className="mt-1 truncate font-serif text-[21px] leading-tight text-ink">
+            <h1 className="mt-2.5 truncate font-serif text-[30px] uppercase leading-[1.05] tracking-[0.01em] text-ink sm:text-[38px]">
               {job.project_name || 'Property walkthrough'}
             </h1>
           </div>
           <button
             onClick={() => setShowDetails((value) => !value)}
-            className="btn btn-secondary btn-sm shrink-0"
+            className="btn btn-secondary shrink-0"
             aria-expanded={showDetails}
           >
             {showDetails ? 'Hide details' : 'Details'}
@@ -563,11 +563,13 @@ function TourViewerContent() {
         </div>
       )}
 
-      <div className="relative m-3 min-h-[45vh] flex-1 overflow-hidden rounded-[18px] border border-line bg-forest-deep shadow-lift sm:m-4">
-        <GameEngine
-          key={`${jobId}-${job.furnishing_style ?? 'modern'}-${job.furnishing_variant ?? 0}`}
-          jobId={jobId}
-        />
+      <div className="flex flex-1 items-center justify-center px-4 pb-5 sm:px-8 sm:pb-8">
+        <div className="relative aspect-video w-full max-w-[min(1180px,calc((100dvh_-_15.5rem)*16/9))] overflow-hidden rounded-[18px] border border-line bg-forest-deep shadow-lift">
+          <GameEngine
+            key={`${jobId}-${job.furnishing_style ?? 'modern'}-${job.furnishing_variant ?? 0}`}
+            jobId={jobId}
+          />
+        </div>
       </div>
     </div>
   )
