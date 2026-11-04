@@ -49,13 +49,21 @@ function StatusChip({ status }: { status: string }) {
   const tone =
     status === 'new'
       ? 'chip-warning'
-      : status === 'building'
+      : status === 'ignored'
         ? 'chip-neutral'
-        : status === 'ignored'
-          ? 'chip-neutral'
-          : 'chip-success'
+        : status === 'delivered'
+          ? 'chip-success'
+          : 'chip-neutral'
   const label =
-    status === 'new' ? 'Awaiting production' : status === 'building' ? 'In production' : status
+    status === 'new'
+      ? 'Awaiting production'
+      : status === 'building'
+        ? 'In production'
+        : status === 'delivered'
+          ? 'Delivered'
+          : status === 'ignored'
+            ? 'Archived'
+            : status
   return <span className={`chip ${tone}`}>{label}</span>
 }
 
@@ -348,8 +356,7 @@ function RequestDetail({
               </div>
             ) : activeJob && TERMINAL_JOB_STATUSES.has(activeJob.status) ? (
               <span className="chip chip-warning">{activeJob.status}</span>
-            ) : null}
-          </div>
+            ) : null}          </div>
           {activeJob && !TERMINAL_JOB_STATUSES.has(activeJob.status) ? (
             <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-parchment">
               <div

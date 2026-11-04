@@ -29,10 +29,14 @@ from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Request
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 
 MAX_FILE_BYTES = 15 * 1024 * 1024
 DOWNLOAD_TIMEOUT_S = 12
-DELIVERY_TIMEOUT_S = 45
+# A delivery downloads the scene and its collision file from this machine, then
+# stores both remotely before answering. Measured at 45s on a local run, so a
+# shorter wait reports a portal that succeeded as a failure.
+DELIVERY_TIMEOUT_S = 180
 ALLOWED_HOST_SUFFIX = ".supabase.co"
 PLAN_EXTENSIONS = {".png", ".jpg", ".jpeg", ".pdf"}
 TERMINAL_BUILD_STATUSES = {"ignored"}
@@ -227,7 +231,7 @@ def build_intake_router(
                 stored_name = f"{entry['file_id']}{extension or '.bin'}"
                 target = target_dir / stored_name
                 try:
-                    result = _download(url, target)
+                    result = await run_in_threadpool(_download, url, target)
                     entry["stored"] = True
                     entry["stored_path"] = str(target)
                     entry["sha256"] = result["sha256"]
@@ -453,16 +457,16 @@ def build_intake_router(
             method="POST",
         )
 
-        try:
-            with urlopen(request, timeout=DELIVERY_TIMEOUT_S) as response:
-                code = response.status
-                result = json.loads(response.read().decode())
-        except HTTPError as exc:
-            code = exc.code
-            result = {"message": exc.read().decode(errors="replace")[:400]}
-        except Exception as exc:
-            code = 0
-            result = {"message": f"The portal could not be reached: {exc}"}
+        def post() -> tuple:
+            try:
+                with urlopen(request, timeout=DELIVERY_TIMEOUT_S) as response:
+                    return response.status, json.loads(response.read().decode())
+            except HTTPError as exc:
+                return exc.code, {"message": exc.read().decode(errors="replace")[:400]}
+            except Exception as exc:
+                return 0, {"message": f"The portal could not be reached: {exc}"}
+
+        code, result = await run_in_threadpool(post)
 
         current = None
         with _LOCK:
