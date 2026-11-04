@@ -48,6 +48,17 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 BASE_DIR = Path(__file__).parent
+
+# Configuration travels with the code: a studio machine copies .env.example to
+# .env once and the engine comes up ready to receive and deliver. Anything
+# already exported in the environment wins, so container and CI setups are
+# unaffected by the file.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(BASE_DIR / ".env", override=False)
+except ImportError:
+    pass
 # On a hosted deployment the application directory is replaced on every
 # release. Point REALESTAI_DATA_DIR at a persistent volume so uploaded plans,
 # generated scenes and job state survive restarts.
@@ -288,7 +299,15 @@ app = FastAPI(
 )
 
 frontend_urls = os.getenv(
-    "FRONTEND_URLS", "http://localhost:3000,http://127.0.0.1:3000"
+    "FRONTEND_URLS",
+    ",".join(
+        (
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:3002",
+            "http://127.0.0.1:3002",
+        )
+    ),
 ).split(",")
 frontend_url_regex = os.getenv("FRONTEND_URL_REGEX", "").strip() or None
 app.add_middleware(

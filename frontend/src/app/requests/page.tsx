@@ -15,6 +15,7 @@ import {
   fetchIntakeRequest,
   fetchIntakeRequests,
   ignoreIntakeRequest,
+  pullIntakeRequests,
   intakeFileUrl,
   spanValue,
   startIntakeBuild,
@@ -480,6 +481,9 @@ export default function RequestsPage() {
   const [offline, setOffline] = useState<string | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const [pulling, setPulling] = useState(false)
+  const [pullNote, setPullNote] = useState<string | null>(null)
+  const [pullError, setPullError] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
@@ -507,6 +511,25 @@ export default function RequestsPage() {
 
   const pending = counts.new ?? 0
 
+  const onPull = async () => {
+    setPulling(true)
+    setPullNote(null)
+    setPullError(null)
+    try {
+      const result = await pullIntakeRequests()
+      const fresh = result.stored
+      setPullNote(
+        fresh === 0
+          ? `Nothing new — ${result.queued} still waiting on the portal, ${result.already_present} already here.`
+          : `Brought ${fresh} submission${fresh === 1 ? '' : 's'} from the portal into this queue.`,
+      )
+    } catch (caught) {
+      setPullError(messageOf(caught))
+    } finally {
+      setPulling(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-ivory">
       <Navigation />
@@ -516,15 +539,24 @@ export default function RequestsPage() {
           title="Requests"
           subtitle="Submissions arrive here from the Crestion Labs portal with the client, company, project brief and the stored floor plan. Building starts from this page."
           actions={
-            offline ? (
-              <span className="chip chip-warning">Engine offline</span>
-            ) : (
-              <span className="chip chip-success">
-                {pending} awaiting production · {total} received
+            <>
+              <span className="chip chip-neutral">
+                {offline ? 'Engine offline' : `${pending} awaiting production · ${total} received`}
               </span>
-            )
+              <button
+                type="button"
+                onClick={() => void onPull()}
+                disabled={pulling || Boolean(offline)}
+                className="btn btn-secondary btn-sm"
+              >
+                {pulling ? 'Pulling…' : 'Pull from portal'}
+              </button>
+            </>
           }
         />
+
+        {pullNote ? <p className="mt-4 text-[12.5px] text-success">{pullNote}</p> : null}
+        {pullError ? <p className="mt-4 text-[12.5px] text-danger">{pullError}</p> : null}
 
         {offline ? (
           <p className="mt-6 rounded-[10px] border border-terracotta/30 bg-terracotta/5 px-4 py-3 text-[12px] text-terracotta">

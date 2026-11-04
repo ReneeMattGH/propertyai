@@ -19,3 +19,4 @@ networkx>=3.0
 
 # Optional PDF floor plans. The image also installs poppler-utils.
 pdf2image>=1.16.0
+python-dotenv>=1.0.0

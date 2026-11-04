@@ -140,6 +140,26 @@ export function ignoreIntakeRequest(requestId: string): Promise<{ request: Intak
   })
 }
 
+export interface IntakePullResult {
+  ok: boolean
+  queued: number
+  stored: number
+  already_present: number
+  unavailable: Array<{ projectId: string; message: string }>
+}
+
+/**
+ * Asks the engine to fetch the portal's waiting queue. This is how a studio
+ * machine on localhost receives submissions made to the deployed client site.
+ */
+export function pullIntakeRequests(): Promise<IntakePullResult> {
+  return requestJson<IntakePullResult>(intakePath('/pull'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  })
+}
+
 export function deliverIntakeRequest(
   requestId: string,
 ): Promise<{ ok: boolean; portal: Record<string, unknown>; request: IntakeRequestSummary }> {

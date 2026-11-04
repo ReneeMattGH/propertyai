@@ -6,6 +6,7 @@ an hour, so a submission is only durable once its files have been copied here.
 
 Endpoints:
   POST /intake/requests                     receive a signed portal submission
+  POST /intake/requests/pull                fetch the portal queue and store what is waiting
   GET  /intake/requests                     list submissions, newest first
   GET  /intake/requests/{id}                one submission with its stored files
   GET  /intake/requests/{id}/files/{fid}    download a stored file
@@ -19,6 +20,7 @@ import hmac
 import json
 import os
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -90,7 +92,9 @@ def _check_url_host(url: str) -> None:
     parts = urlsplit(url)
     host = (parts.hostname or "").lower()
     configured = _configured_hosts()
-    allowed = configured or [ALLOWED_HOST_SUFFIX]
+    # The list is additive: portal storage is always reachable, and extra
+    # entries only widen it for local testing.
+    allowed = [ALLOWED_HOST_SUFFIX, *configured]
     if not any(host == entry or host.endswith(entry.lstrip(".")) for entry in allowed):
         raise ValueError("File links must point at an allowed storage host.")
     # Plain HTTP is only tolerated for a host named exactly in the allow list,
@@ -116,6 +120,23 @@ def _download(url: str, target: Path) -> Dict[str, Any]:
     if written == 0:
         raise ValueError("Stored file is empty.")
     return {"size_bytes": written, "sha256": digest.hexdigest()}
+
+
+def _portal_get(url: str, secret: str) -> Dict[str, Any]:
+    """Signed read against the client portal, used to pull its waiting queue."""
+    timestamp = str(int(time.time() * 1000))
+    canonical = "\n".join(("GET", urlsplit(url).path, timestamp))
+    signature = hmac.new(secret.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+    request = UrlRequest(
+        url,
+        headers={
+            "User-Agent": "crestion-labs-intake/1",
+            "X-Crestion-Signature": f"sha256={signature}",
+            "X-Crestion-Timestamp": timestamp,
+        },
+    )
+    with urlopen(request, timeout=DELIVERY_TIMEOUT_S) as response:
+        return json.loads(response.read().decode())
 
 
 def build_intake_router(
@@ -179,15 +200,7 @@ def build_intake_router(
             "issues": record.get("issues", []),
         }
 
-    @router.post("/intake/requests")
-    async def receive_request(background_tasks: BackgroundTasks, request: Request):
-        raw = await request.body()
-        _verify_signature(raw, request.headers.get("x-crestion-signature"))
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=400, detail="Submission body is not JSON.") from exc
-
+    async def _store_submission(payload: Dict[str, Any]) -> Dict[str, Any]:
         project = payload.get("project") or {}
         project_id = str(project.get("id") or payload.get("requestId") or "").strip()
         if not project_id:
@@ -269,6 +282,71 @@ def build_intake_router(
             store[request_id] = record
             _write_store(store_path, store)
         return {"ok": True, "deduplicated": False, "request": summary(record)}
+
+    @router.post("/intake/requests")
+    async def receive_request(background_tasks: BackgroundTasks, request: Request):
+        raw = await request.body()
+        _verify_signature(raw, request.headers.get("x-crestion-signature"))
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail="Submission body is not JSON.") from exc
+        return await _store_submission(payload)
+
+    @router.post("/intake/requests/pull")
+    async def pull_requests():
+        """
+        Pull leg of the bridge. A deployed portal cannot reach an engine sitting
+        on a laptop, so the studio asks for the waiting queue instead and the
+        submissions land here exactly as a push would have left them.
+        """
+        portal = os.environ.get("CRESTION_PORTAL_URL", "").strip().rstrip("/")
+        if not portal:
+            raise HTTPException(
+                status_code=503,
+                detail="The client portal isn't configured. Set CRESTION_PORTAL_URL on the engine.",
+            )
+        secret = _secret()
+        if not secret:
+            raise HTTPException(
+                status_code=503,
+                detail="Set PRODUCTION_BACKEND_SECRET on the engine to sign the queue request.",
+            )
+
+        try:
+            queue = await run_in_threadpool(_portal_get, f"{portal}/api/production/queue", secret)
+        except HTTPError as exc:
+            detail = exc.read().decode(errors="replace")[:300]
+            try:
+                message = json.loads(detail).get("message", detail)
+            except json.JSONDecodeError:
+                message = detail or str(exc)
+            raise HTTPException(
+                status_code=502,
+                detail=f"The portal refused the queue request ({exc.code}): {message}",
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"The portal queue could not be reached: {exc}",
+            ) from exc
+
+        stored = 0
+        already_present = 0
+        for payload in queue.get("requests") or []:
+            result = await _store_submission(payload)
+            if result.get("deduplicated"):
+                already_present += 1
+            else:
+                stored += 1
+
+        return {
+            "ok": True,
+            "queued": queue.get("count", 0),
+            "stored": stored,
+            "already_present": already_present,
+            "unavailable": queue.get("skipped") or [],
+        }
 
     @router.get("/intake/requests")
     async def list_requests(status: Optional[str] = None, project_id: Optional[str] = None, limit: int = 100):
