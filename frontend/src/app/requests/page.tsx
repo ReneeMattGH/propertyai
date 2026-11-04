@@ -1,8 +1,10 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Navigation from '@/components/Navigation'
+import { FURNISHING_STYLES, TERMINAL_JOB_STATUSES, isFurnishingStyle, styleLabel } from '@/lib/furnishing'
+import { PageHeader } from '@/components/PageHeader'
 import RoomTypeReview from '@/components/RoomTypeReview'
 import {
   fetchJob,
@@ -21,14 +23,6 @@ import {
   type IntakeRequestSummary,
 } from '@/lib/intake'
 
-const STYLES = [
-  { value: 'modern', label: 'Modern' },
-  { value: 'minimalist', label: 'Minimalist' },
-  { value: 'scandinavian', label: 'Scandinavian' },
-  { value: 'warm_luxury', label: 'Warm luxury' },
-] as const
-
-const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -116,6 +110,7 @@ function RequestDetail({
   const [style, setStyle] = useState<string>('modern')
   const [floors, setFloors] = useState(1)
   const [reloadTick, setReloadTick] = useState(0)
+  const styleChosen = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -128,11 +123,10 @@ function RequestDetail({
         const project = next.project ?? {}
         setWidth((current) => current || spanValue(project.planWidthMeters))
         setLength((current) => current || spanValue(project.planLengthMeters))
-        if (
-          project.furnishingStyle &&
-          STYLES.some((option) => option.value === project.furnishingStyle)
-        ) {
-          setStyle((current) => (current === 'modern' ? project.furnishingStyle as string : current))
+        // The client's choice wins until the operator overrides it by hand;
+        // 'modern' is both the default and a legitimate pick, so track touches.
+        if (!styleChosen.current && isFurnishingStyle(project.furnishingStyle)) {
+          setStyle(project.furnishingStyle)
         }
       } catch (caught) {
         if (!cancelled) setError(messageOf(caught))
@@ -280,7 +274,7 @@ function RequestDetail({
             {width && length ? `${width} × ${length} m` : 'Scale not measured'}
           </p>
           <p className="mt-0.5 text-[12px] text-stone">
-            {STYLES.find((option) => option.value === style)?.label}
+            {styleLabel(style)}
             {detail.project?.unitTypes?.length ? ` · ${detail.project.unitTypes.join(', ')}` : ''}
           </p>
         </div>
@@ -328,7 +322,8 @@ function RequestDetail({
                   Preview walkthrough
                 </Link>
                 {detail.delivery ? (
-                  detail.delivery.portal_http_status === 200 ? (
+                  detail.delivery.portal_http_status === 200 &&
+                  detail.delivery.response?.delivered !== false ? (
                     <span className="chip chip-success">Sent to client</span>
                   ) : (
                     <>
@@ -356,7 +351,8 @@ function RequestDetail({
               </div>
             ) : activeJob && TERMINAL_JOB_STATUSES.has(activeJob.status) ? (
               <span className="chip chip-warning">{activeJob.status}</span>
-            ) : null}          </div>
+            ) : null}
+          </div>
           {activeJob && !TERMINAL_JOB_STATUSES.has(activeJob.status) ? (
             <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-parchment">
               <div
@@ -373,7 +369,7 @@ function RequestDetail({
               <RoomTypeReview
                 jobId={activeJob.job_id}
                 style={detail.build.style}
-                variant={0}
+                variant={activeJob.furnishing_variant ?? 0}
                 onConfirmed={refresh}
               />
             </div>
@@ -421,9 +417,12 @@ function RequestDetail({
                 id={`style-${requestId}`}
                 className="field"
                 value={style}
-                onChange={(event) => setStyle(event.target.value)}
+                onChange={(event) => {
+                  styleChosen.current = true
+                  setStyle(event.target.value)
+                }}
               >
-                {STYLES.map((option) => (
+                {FURNISHING_STYLES.map((option) => (
                   <option key={option.value} value={option.value}>
                     {option.label}
                   </option>
@@ -509,32 +508,27 @@ export default function RequestsPage() {
   const pending = counts.new ?? 0
 
   return (
-    <>
+    <div className="min-h-screen bg-ivory">
       <Navigation />
       <main className="shell flex-1 py-10">
-        <header className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <p className="eyebrow">Production queue</p>
-            <h1 className="display mt-3 text-[38px] sm:text-[46px]">Requests</h1>
-            <p className="mt-2 max-w-[620px] text-sm leading-6 text-stone">
-              Submissions arrive here from the Crestion Labs portal with the client, company, project
-              brief and the stored floor plan. Building starts from this page.
-            </p>
-          </div>
-          <div className="flex items-center gap-2.5">
-            {offline ? (
+        <PageHeader
+          eyebrow="Production queue"
+          title="Requests"
+          subtitle="Submissions arrive here from the Crestion Labs portal with the client, company, project brief and the stored floor plan. Building starts from this page."
+          actions={
+            offline ? (
               <span className="chip chip-warning">Engine offline</span>
             ) : (
               <span className="chip chip-success">
                 {pending} awaiting production · {total} received
               </span>
-            )}
-          </div>
-        </header>
+            )
+          }
+        />
 
         {offline ? (
           <p className="mt-6 rounded-[10px] border border-terracotta/30 bg-terracotta/5 px-4 py-3 text-[12px] text-terracotta">
-            The reconstruction engine is not answering on port 8002: {offline}
+            The reconstruction engine is not answering at {offline}
           </p>
         ) : null}
 
@@ -601,6 +595,6 @@ export default function RequestsPage() {
           </ul>
         ) : null}
       </main>
-    </>
+    </div>
   )
 }

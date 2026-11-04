@@ -13,7 +13,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "RealEstAI — Floor plans to furnished 3D walkthroughs",
+  title: {
+    default: "Crestion Labs Studio — Floor plans to furnished 3D walkthroughs",
+    template: "%s · Crestion Labs Studio",
+  },
   description:
     "Upload a 2D floor plan and receive a validated, furnished, first-person 3D walkthrough. Room detection, automatic furnishing, and navigation checks happen on your own machine.",
 };

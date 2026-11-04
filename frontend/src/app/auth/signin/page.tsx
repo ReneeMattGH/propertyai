@@ -1,15 +1,11 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { AuthAlert, AuthField, AuthShell } from '@/components/AuthShell'
 import { createClient } from '@/lib/supabase/client'
 import { useIsClient } from '@/lib/useIsClient'
-import { useRouter } from 'next/navigation'
-
-const supabaseConfigured =
-  Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL) &&
-  process.env.NEXT_PUBLIC_SUPABASE_URL !== 'https://placeholder.supabase.co' &&
-  Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) &&
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY !== 'placeholder_anon_key'
 
 export default function SignInPage() {
   const [email, setEmail] = useState('')
@@ -18,26 +14,22 @@ export default function SignInPage() {
   const [error, setError] = useState<string | null>(null)
   const isClient = useIsClient()
   const router = useRouter()
-  const supabase = isClient && supabaseConfigured ? createClient() : null
+  const supabase = isClient ? createClient() : null
 
-  const handleSignIn = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const handleSignIn = async (event: React.FormEvent) => {
+    event.preventDefault()
     setLoading(true)
     setError(null)
 
-    if (!supabase || !supabaseConfigured) {
-      setError('Supabase is not configured. Please set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local')
+    if (!supabase) {
+      setError('Sign-in is unavailable because Supabase is not configured for this deployment.')
       setLoading(false)
       return
     }
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    })
-
-    if (error) {
-      setError(error.message)
+    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+    if (signInError) {
+      setError(signInError.message)
       setLoading(false)
       return
     }
@@ -46,103 +38,68 @@ export default function SignInPage() {
     router.refresh()
   }
 
-  if (!supabaseConfigured) {
+  if (!supabase) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-900">
-        <div className="max-w-md w-full space-y-8 p-8">
-          <div className="bg-yellow-900/50 border border-yellow-500 text-yellow-200 px-4 py-3 rounded">
-            <h2 className="text-xl font-bold mb-2">Authentication Not Configured</h2>
-            <p className="text-sm">To use authentication, configure Supabase credentials in <code>.env.local</code>:</p>
-            <pre className="mt-2 text-xs bg-gray-800 p-2 rounded">
-NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
-            </pre>
-            <p className="mt-3 text-sm">For demo purposes, you can explore the application without authentication.</p>
-            <button
-              onClick={() => router.push('/')}
-              className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700"
-            >
-              Go to Home
-            </button>
-          </div>
-        </div>
-      </div>
+      <AuthShell
+        eyebrow="Studio access"
+        title="Sign in to Crestion Labs"
+        subtitle="Reconstruction runs locally, so the studio opens without a sign-in step."
+        footer={<Link href="/dashboard" className="hover:text-ink">Open the studio instead</Link>}
+      >
+        <AuthAlert tone="success">
+          Supabase credentials are not set in <code className="font-mono text-[11.5px]">.env.local</code>,
+          so account sign-in is switched off. Every tool below works directly against the engine.
+        </AuthAlert>
+        <Link href="/dashboard" className="btn btn-primary w-full">
+          Continue to the studio
+        </Link>
+      </AuthShell>
     )
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-900">
-      <div className="max-w-md w-full space-y-8 p-8">
-        <div>
-          <h2 className="text-3xl font-bold text-white text-center">
-            Sign in to RealEstAI
-          </h2>
-          <p className="mt-2 text-center text-gray-400">
-            Transform property footage into 3D tours
-          </p>
-        </div>
-        
-        {error && (
-          <div className="bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded">
-            {error}
-          </div>
-        )}
+    <AuthShell
+      eyebrow="Studio access"
+      title="Sign in to Crestion Labs"
+      subtitle="Floor plans, reconstructions and walkthroughs, all produced on this machine."
+      footer={
+        <>
+          Need an account?{' '}
+          <Link href="/auth/signup" className="font-medium text-forest underline decoration-line-strong underline-offset-4 hover:text-ink">
+            Sign up
+          </Link>
+        </>
+      }
+    >
+      {error && <AuthAlert tone="error">{error}</AuthAlert>}
 
-        <form className="mt-8 space-y-6" onSubmit={handleSignIn}>
-          <div className="space-y-4">
-            <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-300">
-                Email address
-              </label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="you@example.com"
-              />
-            </div>
-            
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-300">
-                Password
-              </label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="••••••••"
-              />
-            </div>
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {loading ? 'Signing in...' : 'Sign in'}
-          </button>
-
-          <div className="text-center">
-            <p className="text-sm text-gray-400">
-              Don&apos;t have an account?{' '}
-              <a href="/auth/signup" className="font-medium text-blue-400 hover:text-blue-300">
-                Sign up
-              </a>
-            </p>
-          </div>
-        </form>
-      </div>
-    </div>
+      <form className="space-y-5" onSubmit={handleSignIn}>
+        <AuthField
+          id="email"
+          name="email"
+          label="Email"
+          type="email"
+          autoComplete="email"
+          required
+          value={email}
+          onChange={(event) => setEmail(event.target.value)}
+          placeholder="studio@crestionlabs.com"
+        />
+        <AuthField
+          id="password"
+          name="password"
+          label="Password"
+          type="password"
+          autoComplete="current-password"
+          required
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          placeholder="Your password"
+        />
+        <button type="submit" className="btn btn-primary w-full" disabled={loading}>
+          {loading ? 'Signing in…' : 'Sign in'}
+        </button>
+      </form>
+    </AuthShell>
   )
 }

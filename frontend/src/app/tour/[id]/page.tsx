@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import GameEngine from '@/components/GameEngine'
 import Navigation from '@/components/Navigation'
+import { FURNISHING_STYLES, styleLabel } from '@/lib/furnishing'
 import RoomTypeReview from '@/components/RoomTypeReview'
 import {
   RECONSTRUCTION_URL,
@@ -16,20 +17,6 @@ import {
 } from '@/lib/reconstruction'
 
 const TERMINAL = new Set(['completed', 'failed', 'cancelled'])
-
-const STYLES = [
-  { value: 'modern', label: 'Modern Contemporary' },
-  { value: 'minimalist', label: 'Minimalist' },
-  { value: 'scandinavian', label: 'Scandinavian' },
-  { value: 'warm_luxury', label: 'Warm Luxury' },
-]
-
-function styleLabel(value?: string | null): string {
-  const match = STYLES.find((option) => option.value === value)
-  if (match) return match.label
-  if (!value) return 'Modern Contemporary'
-  return value.replace(/_/g, ' ').replace(/\b[a-z]/g, (letter) => letter.toUpperCase())
-}
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -220,11 +207,11 @@ function TourViewerContent() {
               {error || 'The reconstruction engine did not return this job.'}
             </p>
             <p className="mt-4 text-xs text-stone-light">
-              Start the engine with{' '}
+              The engine is expected at{' '}
               <code className="rounded bg-parchment px-2 py-1 font-mono text-[11px] text-ink">
-                venv/bin/uvicorn main:app --port 8002
+                {RECONSTRUCTION_URL.replace(/^https?:\/\//, '')}
               </code>{' '}
-              and try again.
+              — start it and try again.
             </p>
             <button
               onClick={() => {
@@ -381,7 +368,7 @@ function TourViewerContent() {
                     data-testid="furnishing-style"
                     className="rounded-[8px] border border-line-strong bg-surface px-3 py-2 text-sm font-normal normal-case tracking-normal text-ink focus:border-forest-soft focus:outline-none focus:ring-2 focus:ring-forest/15"
                   >
-                    {STYLES.map((option) => (
+                    {FURNISHING_STYLES.map((option) => (
                       <option key={option.value} value={option.value}>
                         {option.label}
                       </option>
@@ -564,7 +551,7 @@ function TourViewerContent() {
       )}
 
       <div className="flex flex-1 items-center justify-center bg-[#002105] px-4 py-6 sm:px-8 sm:py-8">
-        <div className="relative aspect-video w-full max-w-[min(1180px,calc((100dvh_-_15.5rem)*16/9))] overflow-hidden rounded-[18px] border border-line bg-forest-deep shadow-lift">
+        <div className="relative aspect-video w-full max-w-[min(1180px,max(560px,calc((100dvh_-_13rem)*16/9)))] overflow-hidden rounded-[18px] border border-line bg-forest-deep shadow-lift">
           <GameEngine
             key={`${jobId}-${job.furnishing_style ?? 'modern'}-${job.furnishing_variant ?? 0}`}
             jobId={jobId}

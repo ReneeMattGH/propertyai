@@ -1,5 +1,5 @@
 """
-RealEstAI property reconstruction service.
+Crestion Labs property reconstruction service.
 
 Upload a floor plan and receive an interactive, furnished, walkable
 three-dimensional scene. The floor plan is the only required input: room
@@ -282,7 +282,7 @@ class JobResponse(BaseModel):
 
 
 app = FastAPI(
-    title="RealEstAI Reconstruction Service",
+    title="Crestion Labs Reconstruction Service",
     version="5.0.0",
     description="Floor plan to an interactive, automatically furnished 3D walkthrough",
 )
@@ -1718,7 +1718,7 @@ class ReconstructionPipeline:
                     "property_id": property_id,
                     "job_id": job_id,
                     "engine": {
-                        "service": "RealEstAI Reconstruction Service",
+                        "service": "Crestion Labs Reconstruction Service",
                         "version": app.version,
                         "photographs_used": False,
                         "furniture": "procedural asset library + deterministic constraints",
@@ -2101,7 +2101,7 @@ class ReconstructionPipeline:
                     "property_id": property_id,
                     "job_id": job_id,
                     "engine": {
-                        "service": "RealEstAI Reconstruction Service",
+                        "service": "Crestion Labs Reconstruction Service",
                         "version": app.version,
                         "photogrammetry": photogrammetry_result.get("engine"),
                         "room_classifier": manifest.get("classifier", {}).get("model"),
@@ -2217,7 +2217,7 @@ def get_pipeline() -> ReconstructionPipeline:
 @app.get("/")
 async def root():
     return {
-        "service": "RealEstAI Reconstruction Service",
+        "service": "Crestion Labs Reconstruction Service",
         "version": app.version,
         "status": "operational",
         "jobs": len(load_jobs()),

@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import Navigation from '@/components/Navigation'
+import { FURNISHING_STYLES } from '@/lib/furnishing'
+import { PageHeader } from '@/components/PageHeader'
 import RoomTypeReview from '@/components/RoomTypeReview'
 import {
   RECONSTRUCTION_URL,
@@ -19,13 +21,6 @@ import {
 
 const MAX_FLOOR_PLAN_BYTES = 15 * 1024 * 1024
 const TERMINAL = new Set(['completed', 'failed', 'cancelled'])
-
-const STYLES = [
-  { value: 'modern', label: 'Modern Contemporary' },
-  { value: 'minimalist', label: 'Minimalist' },
-  { value: 'scandinavian', label: 'Scandinavian' },
-  { value: 'warm_luxury', label: 'Warm Luxury' },
-]
 
 const STYLE_PALETTES: Record<string, { note: string; swatches: string[] }> = {
   modern: {
@@ -541,18 +536,12 @@ export default function CreateTourPage() {
       <Navigation />
 
       <main className="shell pb-20 pt-10 sm:pt-12">
-        <div className="flex flex-wrap items-end justify-between gap-5">
-          <div className="animate-rise">
-            <p className="eyebrow">New reconstruction</p>
-            <h1 className="mt-2 text-[34px] leading-tight sm:text-[42px]">Create a walkthrough</h1>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-stone">
-              Upload a 2D floor plan. The engine vectorises walls and openings, segments the rooms,
-              asks you to confirm the inferred room types, then builds and validates a furnished
-              first-person scene. Photographs are never required.
-            </p>
-          </div>
-          <div className="text-xs">
-            {engine === null ? (
+        <PageHeader
+          eyebrow="New reconstruction"
+          title="Create a walkthrough"
+          subtitle="Upload a 2D floor plan. The engine vectorises walls and openings, segments the rooms, asks you to confirm the inferred room types, then builds and validates a furnished first-person scene. Photographs are never required."
+          actions={
+            engine === null ? (
               <span className="chip chip-neutral">Checking engine…</span>
             ) : engine.online ? (
               <span className="chip chip-success">
@@ -564,10 +553,10 @@ export default function CreateTourPage() {
                 </span>
               </span>
             ) : (
-              <span className="chip chip-danger">Engine offline at {RECONSTRUCTION_URL}</span>
-            )}
-          </div>
-        </div>
+              <span className="chip chip-danger">Engine offline</span>
+            )
+          }
+        />
 
         <div className="mt-9 grid grid-cols-1 gap-7 lg:grid-cols-[minmax(0,1.02fr)_minmax(0,0.98fr)] lg:items-start">
           <section className="card animate-rise p-6 sm:p-8">
@@ -747,7 +736,7 @@ export default function CreateTourPage() {
                   onChange={(event) => setStyle(event.target.value)}
                   className="field"
                 >
-                  {STYLES.map((option) => (
+                  {FURNISHING_STYLES.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>

@@ -110,7 +110,7 @@ export default function Home() {
                 before the first visit.
               </h1>
               <p className="mt-6 max-w-xl text-[15px] leading-7 text-stone">
-                RealEstAI turns a 2D floor plan into a furnished, validated, first-person 3D
+                Crestion Labs turns a 2D floor plan into a furnished, validated, first-person 3D
                 walkthrough you can open in a browser. Walls, room types, furniture, lighting, and
                 navigation all come from the plan you upload — never from a template house.
               </p>
@@ -274,7 +274,7 @@ export default function Home() {
             <div className="mt-10 grid gap-4 sm:grid-cols-3">
               {styles.map((style) => (
                 <div key={style.name} className="card p-5">
-                  <div className="flex gap-1.5">
+                  <div className="flex gap-1.5" aria-hidden="true">
                     {style.swatches.map((hex) => (
                       <span
                         key={hex}
@@ -331,7 +331,7 @@ export default function Home() {
         <div className="shell flex flex-col gap-6 py-10 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="font-serif text-lg text-ink">
-              RealEst<span className="text-bronze">AI</span>
+              Crestion <span className="text-bronze">Labs</span>
             </p>
             <p className="mt-1 text-xs text-stone">
               Floor-plan reconstruction, furnishing, and walkthroughs.
@@ -342,7 +342,7 @@ export default function Home() {
             <Link href="/tours" className="hover:text-ink">Walkthroughs</Link>
             <Link href="/create-tour" className="hover:text-ink">Create</Link>
           </nav>
-          <p className="text-[11px] text-stone-light">© {currentYear} RealEstAI</p>
+          <p className="text-[11px] text-stone-light">© {currentYear} Crestion Labs</p>
         </div>
       </footer>
     </div>

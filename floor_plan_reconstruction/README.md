@@ -1,4 +1,4 @@
-# RealEstAI reconstruction engine
+# Crestion Labs reconstruction engine
 
 FastAPI service that turns an uploaded 2D floor plan plus interior photographs
 into a validated, walkable GLB scene. It runs on CPU with no external

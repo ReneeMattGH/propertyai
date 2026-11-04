@@ -1,6 +1,7 @@
 'use client'
 
 import Navigation from '@/components/Navigation'
+import { PageHeader } from '@/components/PageHeader'
 import {
   RECONSTRUCTION_URL,
   floorPlanPreviewUrl,
@@ -114,37 +115,34 @@ export default function ToursPage() {
       <Navigation />
 
       <main className="shell pb-20 pt-10 sm:pt-12">
-        <div className="flex flex-wrap items-end justify-between gap-5">
-          <div className="animate-rise">
-            <p className="eyebrow">Gallery</p>
-            <h1 className="mt-2 text-[34px] leading-tight sm:text-[42px]">All walkthroughs</h1>
-            <p className="mt-3 max-w-xl text-sm leading-6 text-stone">
-              Every job stored by the reconstruction engine — completed walkthroughs, live pipeline
-              runs, and the failed attempts with their diagnostics intact.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2.5">
-            <button
-              type="button"
-              onClick={() => {
-                setLoading(true)
-                setReload((value) => value + 1)
-              }}
-              className="btn btn-secondary"
-            >
-              Refresh
-            </button>
-            <Link href="/create-tour" className="btn btn-primary">
-              New walkthrough
-            </Link>
-          </div>
-        </div>
+        <PageHeader
+          eyebrow="Gallery"
+          title="All walkthroughs"
+          subtitle="Every job stored by the reconstruction engine — completed walkthroughs, live pipeline runs, and the failed attempts with their diagnostics intact."
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoading(true)
+                  setReload((value) => value + 1)
+                }}
+                className="btn btn-secondary"
+              >
+                Refresh
+              </button>
+              <Link href="/create-tour" className="btn btn-primary">
+                New walkthrough
+              </Link>
+            </>
+          }
+        />
 
         {error && (
           <div className="mt-6 rounded-[12px] border border-danger/30 bg-danger/[0.06] px-4 py-3.5 text-sm text-danger">
             <p className="font-medium">Cannot reach the reconstruction engine</p>
             <p className="mt-1 break-words text-xs text-danger/80">{error}</p>
-            <p className="mt-1 text-[11px] text-stone">Engine: {RECONSTRUCTION_URL}</p>
+            <p className="mt-1 text-[11px] text-stone">Start the engine, then refresh this page.</p>
           </div>
         )}
 

@@ -1,6 +1,7 @@
 'use client'
 
 import Navigation from '@/components/Navigation'
+import { PageHeader } from '@/components/PageHeader'
 import { createClient } from '@/lib/supabase/client'
 import { useIsClient } from '@/lib/useIsClient'
 import {
@@ -135,7 +136,7 @@ function EmptyState() {
         </div>
         <h2 className="mt-6 text-2xl">No walkthroughs yet</h2>
         <p className="mt-2 text-sm leading-6 text-stone">
-          Upload a floor plan and RealEstAI will detect the rooms, furnish them in a chosen style,
+          Upload a floor plan and Crestion Labs will detect the rooms, furnish them in a chosen style,
           validate the geometry, then open a first-person walkthrough in your browser.
         </p>
         <div className="mt-7 flex flex-wrap justify-center gap-2.5">
@@ -183,21 +184,16 @@ export default function DashboardPage() {
   const supabase = isClient ? createClient() : null
 
   useEffect(() => {
-    if (!isClient) return
-    const hasUrl =
-      process.env.NEXT_PUBLIC_SUPABASE_URL &&
-      process.env.NEXT_PUBLIC_SUPABASE_URL !== 'https://placeholder.supabase.co'
-    const hasKey =
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY &&
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY !== 'placeholder_anon_key'
-    if (!hasUrl || !hasKey || !supabase) return
+    if (!supabase) return
     supabase.auth
       .getUser()
       .then(({ data }) => {
         if (!data.user) router.push('/auth/signin')
       })
-      .catch(() => undefined)
-  }, [isClient, router, supabase])
+      .catch((error: unknown) => {
+        console.error('Session check failed:', error)
+      })
+  }, [router, supabase])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -271,44 +267,41 @@ export default function DashboardPage() {
       <Navigation />
 
       <main className="shell pb-20 pt-10 sm:pt-12">
-        <div className="flex flex-wrap items-end justify-between gap-5">
-          <div className="animate-rise">
-            <p className="eyebrow">Workspace</p>
-            <h1 className="mt-2 text-[34px] leading-tight sm:text-[42px]">Your walkthroughs</h1>
-            <p className="mt-3 max-w-xl text-sm leading-6 text-stone">
-              Every reconstruction job handled by your local engine, with its real status, floor
-              plan, room count, and furnishing. Nothing here is sampled or pre-filled.
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2.5">
-            <button
-              type="button"
-              onClick={() => {
-                setLoading(true)
-                setReloadTick((value) => value + 1)
-              }}
-              className="btn btn-secondary"
-            >
-              <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
-                <path
-                  d="M13 8a5 5 0 1 1-1.6-3.7M13 3v3h-3"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.4"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-              Refresh
-            </button>
-            <Link href="/create-tour" className="btn btn-primary">
-              <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
-                <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-              </svg>
-              New walkthrough
-            </Link>
-          </div>
-        </div>
+        <PageHeader
+          eyebrow="Workspace"
+          title="Your walkthroughs"
+          subtitle="Every reconstruction job handled by your local engine, with its real status, floor plan, room count, and furnishing. Nothing here is sampled or pre-filled."
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoading(true)
+                  setReloadTick((value) => value + 1)
+                }}
+                className="btn btn-secondary"
+              >
+                <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
+                  <path
+                    d="M13 8a5 5 0 1 1-1.6-3.7M13 3v3h-3"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                Refresh
+              </button>
+              <Link href="/create-tour" className="btn btn-primary">
+                <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" aria-hidden="true">
+                  <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                </svg>
+                New walkthrough
+              </Link>
+            </>
+          }
+        />
 
         <div className="card mt-8 grid grid-cols-2 divide-line sm:grid-cols-4 sm:divide-x">
           <StatCell label="Total jobs" value={counts.all} hint="Stored by the engine" />
@@ -350,10 +343,11 @@ export default function DashboardPage() {
               <p className="font-medium">Cannot reach the reconstruction engine</p>
               <p className="mt-1 break-words text-xs text-danger/80">{error}</p>
               <p className="mt-1 text-[11px] text-stone">
-                Engine: {RECONSTRUCTION_URL} — start it with{' '}
+                The engine is expected at{' '}
                 <code className="rounded bg-surface px-1.5 py-0.5 text-[11px] text-ink">
-                  venv/bin/uvicorn main:app --port 8002
+                  {RECONSTRUCTION_URL.replace(/^https?:\/\//, '')}
                 </code>
+                . Start it, then retry.
               </p>
             </div>
             <button

@@ -1,17 +1,12 @@
 'use client'
 
-import { createClient } from '@/lib/supabase/client'
+import { createClient, isSupabaseConfigured } from '@/lib/supabase/client'
 import { useIsClient } from '@/lib/useIsClient'
+import { Wordmark } from '@/components/Wordmark'
 import type { User } from '@supabase/supabase-js'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useMemo, useState } from 'react'
-
-const supabaseConfigured =
-  Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL) &&
-  process.env.NEXT_PUBLIC_SUPABASE_URL !== 'https://placeholder.supabase.co' &&
-  Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) &&
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY !== 'placeholder_anon_key'
 
 const links = [
   { href: '/dashboard', label: 'Dashboard', match: ['/dashboard'] },
@@ -19,43 +14,13 @@ const links = [
   { href: '/tours', label: 'Walkthroughs', match: ['/tours', '/tour'] },
 ] as const
 
-function Wordmark() {
-  return (
-    <span className="flex items-center gap-2.5">
-      <span className="relative grid h-9 w-9 place-items-center rounded-[10px] bg-forest text-ivory shadow-[0_1px_0_rgba(255,255,255,0.12)_inset]">
-        <svg viewBox="0 0 24 24" className="h-[19px] w-[19px]" aria-hidden="true">
-          <path
-            d="M4 9.2 12 3.5l8 5.7V20h-5.6v-5.4H9.6V20H4V9.2Z"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.3"
-            strokeLinejoin="round"
-          />
-          <path d="M4 12.4h5.6M14.4 12.4H20" stroke="currentColor" strokeWidth="1.1" />
-        </svg>
-      </span>
-      <span className="flex flex-col leading-none">
-        <span className="font-serif text-[19px] font-medium tracking-tight text-ink">
-          RealEst<span className="text-bronze">AI</span>
-        </span>
-        <span className="mt-1 text-[9px] font-semibold uppercase tracking-[0.24em] text-stone-light">
-          Spatial Studio
-        </span>
-      </span>
-    </span>
-  )
-}
-
 export default function Navigation() {
   const [user, setUser] = useState<User | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const isClient = useIsClient()
   const router = useRouter()
   const pathname = usePathname()
-  const supabase = useMemo(
-    () => (isClient && supabaseConfigured ? createClient() : null),
-    [isClient],
-  )
+  const supabase = useMemo(() => (isClient ? createClient() : null), [isClient])
 
   useEffect(() => {
     if (!supabase) return
@@ -81,7 +46,11 @@ export default function Navigation() {
   const handleSignOut = async () => {
     setMenuOpen(false)
     if (!supabase) return
-    await supabase.auth.signOut()
+    try {
+      await supabase.auth.signOut()
+    } catch (error) {
+      console.error('Sign out failed:', error)
+    }
     router.push('/')
     router.refresh()
   }
@@ -91,9 +60,7 @@ export default function Navigation() {
   return (
     <header className="sticky top-0 z-50 border-b border-line/80 bg-ivory/85 backdrop-blur-md">
       <nav className="shell flex h-[68px] items-center justify-between gap-4" aria-label="Main">
-        <Link href="/" className="shrink-0 rounded-md" aria-label="RealEstAI home">
-          <Wordmark />
-        </Link>
+        <Wordmark />
 
         <div className="hidden items-center gap-1 md:flex">
           {links.map((link) => {
@@ -123,8 +90,8 @@ export default function Navigation() {
         </div>
 
         <div className="hidden items-center gap-3 md:flex">
-          {!supabaseConfigured ? (
-            <span className="chip chip-neutral" title="Authentication is not configured for this local workspace">
+          {!isSupabaseConfigured ? (
+            <span className="chip chip-neutral">
               <span className="h-1.5 w-1.5 rounded-full bg-bronze" />
               Local workspace
             </span>
@@ -206,7 +173,7 @@ export default function Navigation() {
               )
             })}
             <div className="my-2 h-px bg-line" />
-            {!supabaseConfigured ? (
+            {!isSupabaseConfigured ? (
               <span className="px-3 py-1 text-xs text-stone">Local workspace · no authentication</span>
             ) : user ? (
               <button

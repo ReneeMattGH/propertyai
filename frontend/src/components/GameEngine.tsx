@@ -747,7 +747,8 @@ export default function GameEngine({ jobId }: GameEngineProps) {
       {phase === 'ready' && (
         <>
           <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-end p-4 sm:p-5">
-            <div className="pointer-events-auto flex items-center gap-3">
+            <div className="pointer-events-auto flex flex-col items-end gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
               <button
                 onClick={() => setMenuOpen((value) => !value)}
                 className={hudIcon}
@@ -789,7 +790,7 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                 }}
                 aria-label="Go to room"
                 data-testid="hud-room-select"
-                className="max-w-[13rem] truncate rounded-full border border-white/12 bg-[#111713]/80 px-3 py-1.5 text-[11px] text-ivory/85 outline-none backdrop-blur-md transition hover:border-white/25 focus-visible:ring-2 focus-visible:ring-bronze/60"
+                className="w-[9.5rem] truncate rounded-full border border-white/12 bg-[#111713]/80 px-3 py-1.5 text-[11px] text-ivory/85 outline-none backdrop-blur-md transition hover:border-white/25 focus-visible:ring-2 focus-visible:ring-bronze/60 sm:w-[13rem]"
               >
                 {roomNodes.map((node) => (
                   <option key={node.id} value={node.id} className="text-ink">
@@ -820,14 +821,13 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                   />
                 </svg>
               </button>
-            </div>
-          </div>
+              </div>
 
-          {menuOpen && (
-            <div
-              className="pointer-events-auto absolute right-4 top-[4.9rem] z-20 w-[min(19rem,calc(100vw-2rem))] rounded-[14px] border border-white/10 bg-[#111713]/94 p-3.5 shadow-[0_28px_70px_-30px_rgba(0,0,0,0.95)] backdrop-blur-md sm:right-5"
-              data-testid="hud-settings-panel"
-            >
+              {menuOpen && (
+                <div
+                  className="pointer-events-auto w-[min(19rem,calc(100vw-2.5rem))] rounded-[14px] border border-white/10 bg-[#111713]/94 p-3.5 shadow-[0_28px_70px_-30px_rgba(0,0,0,0.95)] backdrop-blur-md"
+                  data-testid="hud-settings-panel"
+                >
               <p className="px-1 pb-2.5 text-[9px] font-semibold uppercase tracking-[0.2em] text-ivory/35">
                 Lighting
               </p>
@@ -887,8 +887,10 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                   </>
                 )}
               </p>
+                </div>
+              )}
             </div>
-          )}
+          </div>
 
           {isTouch && (
             <>

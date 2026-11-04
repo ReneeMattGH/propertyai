@@ -27,7 +27,7 @@ app.include_router(processing.router)
 @app.get("/")
 async def root():
     return {
-        "message": "RealEstAI API",
+        "message": "Crestion Labs API",
         "version": settings.APP_VERSION,
         "status": "operational"
     }
