@@ -614,7 +614,7 @@ function TourViewerContent() {
         </div>
       )}
 
-      <div className="relative min-h-[58vh] flex-1 bg-forest-deep sm:min-h-[70vh]">
+      <div className="relative min-h-[80vh] bg-forest-deep md:sticky md:top-[68px] md:h-[calc(100dvh-68px)] md:min-h-[620px]">
         <GameEngine
           key={`${jobId}-${job.furnishing_style ?? 'modern'}-${job.furnishing_variant ?? 0}`}
           jobId={jobId}

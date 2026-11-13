@@ -413,6 +413,7 @@ function contactShadowTexture(): THREE.CanvasTexture {
 
 export default function GameEngine({ jobId }: GameEngineProps) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const canvasMountRef = useRef<HTMLDivElement>(null)
   const runtimeRef = useRef<Runtime | null>(null)
   const joystickRef = useRef({ x: 0, z: 0, active: false })
 
@@ -457,7 +458,7 @@ export default function GameEngine({ jobId }: GameEngineProps) {
   }, [])
 
   useEffect(() => {
-    const container = containerRef.current
+    const container = canvasMountRef.current
     if (!container) return
 
     const controller = new AbortController()
@@ -682,7 +683,7 @@ export default function GameEngine({ jobId }: GameEngineProps) {
   return (
     <div
       ref={containerRef}
-      className="absolute inset-0 select-none overflow-hidden bg-[#0e1310] text-ivory"
+      className="absolute inset-0 flex select-none flex-col overflow-hidden bg-[#0e1310] text-ivory"
       data-testid="walkthrough-viewer"
     >
       {showOverlay && (
@@ -762,30 +763,28 @@ export default function GameEngine({ jobId }: GameEngineProps) {
       )}
 
       {phase === 'ready' && (
-        <>
-          <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-3 p-3 sm:p-4">
-            <div className="pointer-events-auto w-[min(21rem,calc(100vw-4.5rem))] rounded-[12px] border border-white/10 bg-[#111713]/80 p-3.5 shadow-[0_24px_60px_-32px_rgba(0,0,0,0.95)] backdrop-blur-md max-sm:w-[calc(100vw-7rem)] max-sm:p-2.5">
-              <p className="hidden text-[9px] font-semibold uppercase tracking-[0.26em] text-bronze-soft sm:block">
+        <div className="relative z-20 border-b border-white/10 bg-[#111713]/95 px-3 py-2 backdrop-blur-md sm:px-4">
+          <div className="flex flex-wrap items-start gap-x-6 gap-y-1.5">
+            <div
+              className="min-w-0 w-full sm:w-auto sm:max-w-[21rem]"
+              data-testid="room-info-overlay"
+              data-room-id={currentRoom?.id ?? ''}
+            >
+              <p className="text-[9px] font-semibold uppercase tracking-[0.26em] text-bronze-soft">
                 Walkthrough
               </p>
-              <h2 className="truncate font-serif text-[16px] leading-tight text-ivory sm:mt-1 sm:text-[19px]">
+              <h2 className="truncate font-serif text-[16px] leading-tight text-ivory sm:text-[19px]">
                 {job?.project_name || 'Property walkthrough'}
               </h2>
-              <p className="mt-1 hidden text-[10.5px] leading-4 text-ivory/55 sm:block">
+              <p className="mt-0.5 text-[10.5px] leading-4 text-ivory/55">
                 {rooms} room{rooms === 1 ? '' : 's'} · {furnitureCount} furniture · {doors} doorway
                 {doors === 1 ? '' : 's'}
                 {approximate ? ' · estimated scale' : ' · measured scale'}
                 {job?.navigation_available === false ? ' · partial navigation' : ''}
               </p>
-              <div
-                className="mt-1.5 border-t border-white/10 pt-1.5 sm:mt-2.5 sm:pt-2.5"
-                data-testid="room-info-overlay"
-                data-room-id={currentRoom?.id ?? ''}
-              >
+              <div className="mt-1.5 border-t border-white/10 pt-1.5">
                 <div className="flex items-baseline justify-between gap-2">
-                  <p className="hidden text-[9px] uppercase tracking-[0.2em] text-ivory/40 sm:block">
-                    Current room
-                  </p>
+                  <p className="text-[9px] uppercase tracking-[0.2em] text-ivory/40">Current room</p>
                   {currentRoom?.area_m2 != null && (
                     <p className="text-[9.5px] tabular-nums text-ivory/45 sm:text-[10px]">
                       {Number(currentRoom.area_m2).toFixed(1)} m²
@@ -814,7 +813,7 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                   </p>
                 )}
                 {currentRoom && currentFurniture.length > 0 && (
-                  <p className="mt-1 hidden text-[10px] leading-4 text-ivory/40 sm:block">
+                  <p className="mt-1 hidden text-[10px] leading-4 text-ivory/40 md:block">
                     {currentFurniture
                       .slice(0, 5)
                       .map((item) => item.label)
@@ -823,7 +822,7 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                   </p>
                 )}
                 {currentRoom && currentFurniture.length === 0 && (
-                  <p className="mt-1 hidden text-[10px] leading-4 text-ivory/40 sm:block">
+                  <p className="mt-1 hidden text-[10px] leading-4 text-ivory/40 md:block">
                     Left minimal — items that would block a walkable route are skipped rather than
                     forced.
                   </p>
@@ -831,7 +830,40 @@ export default function GameEngine({ jobId }: GameEngineProps) {
               </div>
             </div>
 
-            <div className="pointer-events-auto flex max-w-[58%] flex-col items-end gap-2">
+            {roomNodes.length > 1 && (
+              <div className="hidden min-w-0 flex-1 lg:block" data-testid="room-rail">
+                <p className="text-[9px] font-semibold uppercase tracking-[0.2em] text-ivory/35">
+                  Rooms
+                </p>
+                <ul className="mt-1 flex max-h-[24vh] flex-wrap gap-1 overflow-y-auto pr-0.5">
+                  {roomNodes.map((node) => {
+                    const active = node.id === currentRoomId
+                    return (
+                      <li key={node.id}>
+                        <button
+                          onClick={() => runtimeRef.current?.teleportToRoom(node.id)}
+                          aria-current={active ? 'location' : undefined}
+                          className={
+                            active
+                              ? 'flex items-center justify-between gap-2 rounded-full bg-white/10 px-3 py-1.5 text-left text-[11px] text-ivory'
+                              : 'flex items-center justify-between gap-2 rounded-full border border-white/8 px-3 py-1.5 text-left text-[11px] text-ivory/55 transition hover:bg-white/[0.06] hover:text-ivory/85 motion-reduce:transition-none'
+                          }
+                        >
+                          <span className="truncate">{node.name || `Room ${node.id + 1}`}</span>
+                          {node.area_m2 != null && (
+                            <span className="shrink-0 text-[9px] tabular-nums text-ivory/35">
+                              {Number(node.area_m2).toFixed(0)} m²
+                            </span>
+                          )}
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
+            )}
+
+            <div className="flex w-full flex-col gap-1.5 sm:ml-auto sm:w-auto sm:items-end">
               <div className="hidden max-w-full md:block">
                 <ViewerControls {...viewerControlProps} />
               </div>
@@ -853,139 +885,30 @@ export default function GameEngine({ jobId }: GameEngineProps) {
             </div>
           </div>
 
-          {menuOpen && (
-            <div className="pointer-events-auto absolute right-3 top-[7.5rem] z-20 w-[min(21rem,calc(100vw-1.5rem))] rounded-[12px] border border-white/10 bg-[#111713]/92 p-3 shadow-[0_28px_70px_-30px_rgba(0,0,0,0.95)] backdrop-blur-md md:hidden">
-              <ViewerControls {...viewerControlProps} compact />
-              {roomNodes.length > 1 && (
-                <div className="mt-2 border-t border-white/10 pt-2" data-testid="mobile-room-list">
-                  <p className="px-1 pb-1 text-[9px] font-semibold uppercase tracking-[0.2em] text-ivory/35">
-                    Rooms
-                  </p>
-                  <div className="grid grid-cols-2 gap-1">
-                    {roomNodes.map((node) => {
-                      const active = node.id === currentRoomId
-                      return (
-                        <button
-                          key={node.id}
-                          onClick={() => {
-                            runtimeRef.current?.teleportToRoom(node.id)
-                            setMenuOpen(false)
-                          }}
-                          aria-current={active ? 'location' : undefined}
-                          className={
-                            active
-                              ? 'truncate rounded-[7px] bg-white/12 px-2 py-1.5 text-left text-[10.5px] text-ivory'
-                              : 'truncate rounded-[7px] border border-white/8 px-2 py-1.5 text-left text-[10.5px] text-ivory/65'
-                          }
-                        >
-                          {node.name || `Room ${node.id + 1}`}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-              <a
-                href={`/tour/${jobId}`}
-                className="mt-1.5 flex items-center justify-center rounded-full border border-white/12 px-3 py-1.5 text-[11px] font-medium text-ivory/75 transition hover:border-white/30 hover:text-ivory motion-reduce:transition-none"
+          <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-white/10 pt-1.5">
+            <p className="text-[10px] text-ivory/45">
+              {isTouch
+                ? 'Drag the scene to look around'
+                : pointerLocked
+                  ? 'Mouse look active · Esc to release'
+                  : 'Click the scene to look around · WASD / arrows move · Shift run · Space jump · R reset · Esc release'}
+            </p>
+            <div className="relative flex items-center gap-2 text-[10px] text-ivory/45">
+              {fps !== null && <span className="tabular-nums">{fps} fps</span>}
+              <button
+                onClick={() => setHelpOpen((value) => !value)}
+                className="text-ivory/75 underline decoration-white/30 decoration-dotted underline-offset-2 transition hover:text-ivory motion-reduce:transition-none"
               >
-                Reconstruction details
-              </a>
+                Scene info
+              </button>
             </div>
-          )}
-
-          {roomNodes.length > 1 && (
-            <div
-              className="pointer-events-none absolute left-4 top-1/2 z-20 hidden -translate-y-1/2 lg:block"
-              data-testid="room-rail"
-            >
-              <div className="pointer-events-auto w-44 rounded-[12px] border border-white/10 bg-[#111713]/70 p-2 backdrop-blur-md">
-                <p className="px-2 pb-1.5 pt-1 text-[9px] font-semibold uppercase tracking-[0.2em] text-ivory/35">
-                  Rooms
-                </p>
-                <ul className="max-h-[52vh] space-y-0.5 overflow-y-auto pr-0.5">
-                  {roomNodes.map((node) => {
-                    const active = node.id === currentRoomId
-                    return (
-                      <li key={node.id}>
-                        <button
-                          onClick={() => runtimeRef.current?.teleportToRoom(node.id)}
-                          aria-current={active ? 'location' : undefined}
-                          className={
-                            active
-                              ? 'flex w-full items-center justify-between gap-2 rounded-[7px] bg-white/10 px-2 py-1.5 text-left text-[11px] text-ivory'
-                              : 'flex w-full items-center justify-between gap-2 rounded-[7px] px-2 py-1.5 text-left text-[11px] text-ivory/55 transition hover:bg-white/[0.06] hover:text-ivory/85 motion-reduce:transition-none'
-                          }
-                        >
-                          <span className="truncate">{node.name || `Room ${node.id + 1}`}</span>
-                          {node.area_m2 != null && (
-                            <span className="shrink-0 text-[9px] tabular-nums text-ivory/35">
-                              {Number(node.area_m2).toFixed(0)} m²
-                            </span>
-                          )}
-                        </button>
-                      </li>
-                    )
-                  })}
-                </ul>
-              </div>
-            </div>
-          )}
-
-          {!isTouch && <div className="pointer-events-none absolute left-1/2 top-1/2 z-10 h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/45" />}
-
-          {!isTouch && !pointerLocked && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-16 z-10 flex justify-center px-4">
-              <div className="rounded-full border border-white/10 bg-[#111713]/75 px-4 py-2 text-center backdrop-blur-md">
-                <p className="text-[11px] font-medium text-ivory/85">
-                  Click the scene to look around · WASD to walk
-                </p>
-              </div>
-            </div>
-          )}
-
-          {isTouch ? (
-            <>
-              <Joystick onChange={handleJoystick} />
-              <div className="absolute bottom-10 right-4 z-10 flex flex-col items-stretch gap-2">
-                <button
-                  onClick={() => {
-                    const runtime = runtimeRef.current
-                    if (runtime) runtime.jumpQueued = true
-                  }}
-                  className="rounded-full border border-white/18 bg-[#111713]/75 px-4 py-3 text-[11px] font-semibold text-ivory backdrop-blur-md transition active:scale-95 motion-reduce:transition-none"
-                >
-                  Jump
-                </button>
-                <button
-                  onClick={resetView}
-                  className="rounded-full border border-white/18 bg-[#111713]/75 px-4 py-3 text-[11px] font-semibold text-ivory backdrop-blur-md transition active:scale-95 motion-reduce:transition-none"
-                >
-                  Reset
-                </button>
-              </div>
-              <p className="pointer-events-none absolute bottom-44 left-4 z-10 w-32 rounded-full bg-[#111713]/60 px-3 py-1 text-center text-[10px] text-ivory/70 backdrop-blur">
-                Drag the scene to look around
-              </p>
-            </>
-          ) : (
-            <div className="pointer-events-none absolute bottom-3 left-3 z-10 hidden rounded-full border border-white/10 bg-[#111713]/60 px-3 py-1.5 text-[10px] text-ivory/55 backdrop-blur sm:block">
-              WASD / arrows move · mouse look · Shift run · Space jump · R reset · Esc release
-            </div>
-          )}
-
-          <div className="pointer-events-none absolute bottom-3 right-3 z-10 flex items-center gap-2 rounded-full border border-white/10 bg-[#111713]/65 px-2.5 py-1.5 text-[10px] text-ivory/45 backdrop-blur">
-            {fps !== null && <span className="tabular-nums">{fps} fps</span>}
-            <button
-              onClick={() => setHelpOpen((value) => !value)}
-              className="pointer-events-auto text-ivory/75 underline decoration-white/30 decoration-dotted underline-offset-2 transition hover:text-ivory motion-reduce:transition-none"
-            >
-              Scene info
-            </button>
           </div>
 
           {helpOpen && (
-            <div className="absolute bottom-12 right-3 z-30 w-80 max-w-[calc(100%-1.5rem)] rounded-[12px] border border-white/10 bg-[#111713]/96 p-4 text-[11px] text-ivory/60 shadow-[0_32px_80px_-32px_rgba(0,0,0,0.95)] backdrop-blur-md">
+            <div
+              className="mt-2 max-h-[38vh] max-w-3xl overflow-y-auto rounded-[12px] border border-white/10 bg-[#111713]/80 p-4 text-left text-[11px] text-ivory/60"
+              data-testid="scene-info-panel"
+            >
               <div className="flex items-start justify-between gap-3">
                 <p className="font-serif text-[17px] leading-tight text-ivory">
                   About this reconstruction
@@ -998,7 +921,7 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                   Close
                 </button>
               </div>
-              <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2">
+              <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
                 <dt className="text-ivory/35">Rooms</dt>
                 <dd>{rooms}</dd>
                 <dt className="text-ivory/35">Furniture</dt>
@@ -1052,8 +975,81 @@ export default function GameEngine({ jobId }: GameEngineProps) {
               )}
             </div>
           )}
-        </>
+
+          {menuOpen && (
+            <div className="absolute right-3 top-full z-30 mt-2 w-[min(21rem,calc(100vw-1.5rem))] rounded-[12px] border border-white/10 bg-[#111713]/95 p-3 text-left shadow-[0_28px_70px_-30px_rgba(0,0,0,0.95)] backdrop-blur-md md:hidden">
+              <ViewerControls {...viewerControlProps} compact />
+              {roomNodes.length > 1 && (
+                <div className="mt-2 border-t border-white/10 pt-2" data-testid="mobile-room-list">
+                  <p className="px-1 pb-1 text-[9px] font-semibold uppercase tracking-[0.2em] text-ivory/35">
+                    Rooms
+                  </p>
+                  <div className="grid grid-cols-2 gap-1">
+                    {roomNodes.map((node) => {
+                      const active = node.id === currentRoomId
+                      return (
+                        <button
+                          key={node.id}
+                          onClick={() => {
+                            runtimeRef.current?.teleportToRoom(node.id)
+                            setMenuOpen(false)
+                          }}
+                          aria-current={active ? 'location' : undefined}
+                          className={
+                            active
+                              ? 'truncate rounded-[7px] bg-white/12 px-2 py-1.5 text-left text-[10.5px] text-ivory'
+                              : 'truncate rounded-[7px] border border-white/8 px-2 py-1.5 text-left text-[10.5px] text-ivory/65'
+                          }
+                        >
+                          {node.name || `Room ${node.id + 1}`}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+              <a
+                href={`/tour/${jobId}`}
+                className="mt-1.5 flex items-center justify-center rounded-full border border-white/12 px-3 py-1.5 text-[11px] font-medium text-ivory/75 transition hover:border-white/30 hover:text-ivory motion-reduce:transition-none"
+              >
+                Reconstruction details
+              </a>
+            </div>
+          )}
+        </div>
       )}
+
+      <div ref={canvasMountRef} className="relative min-h-0 flex-1">
+        {phase === 'ready' && (
+          <>
+            {!isTouch && (
+              <div className="pointer-events-none absolute left-1/2 top-1/2 z-10 h-1 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/45" />
+            )}
+            {isTouch && (
+              <>
+                <Joystick onChange={handleJoystick} />
+                <div className="absolute bottom-10 right-4 z-10 flex flex-col items-stretch gap-2">
+                  <button
+                    onClick={() => {
+                      const runtime = runtimeRef.current
+                      if (runtime) runtime.jumpQueued = true
+                    }}
+                    className="rounded-full border border-white/18 bg-[#111713]/75 px-4 py-3 text-[11px] font-semibold text-ivory backdrop-blur-md transition active:scale-95 motion-reduce:transition-none"
+                  >
+                    Jump
+                  </button>
+                  <button
+                    onClick={resetView}
+                    className="rounded-full border border-white/18 bg-[#111713]/75 px-4 py-3 text-[11px] font-semibold text-ivory backdrop-blur-md transition active:scale-95 motion-reduce:transition-none"
+                  >
+                    Reset
+                  </button>
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </div>
     </div>
   )
 }
@@ -1236,7 +1232,7 @@ async function buildRuntime(
   }
 
   renderer.setPixelRatio(qualityPixelRatio(options.quality))
-  renderer.setSize(container.clientWidth, container.clientHeight)
+  renderer.setSize(container.clientWidth, container.clientHeight, false)
   renderer.outputColorSpace = THREE.SRGBColorSpace
   renderer.toneMapping = THREE.ACESFilmicToneMapping
   renderer.toneMappingExposure = LIGHTING_PRESETS[options.lighting].exposure
@@ -1961,7 +1957,7 @@ async function buildRuntime(
     if (!width || !height) return
     camera.aspect = width / height
     camera.updateProjectionMatrix()
-    renderer.setSize(width, height, false)
+    renderer.setSize(width, height)
   }
   const observer = new ResizeObserver(resize)
   observer.observe(container)
