@@ -269,7 +269,7 @@ def test_geometry_exports_a_loadable_glb(fixture_plan, fixture_photos, cleanup_j
     assert geometry["rooms_count"] == 4
     assert geometry["collision_walls"] >= 4
     assert any("Only axis-aligned" in item for item in geometry["limitations"])
-    assert any("Door leaves and stairs are not reconstructed" in item for item in geometry["limitations"])
+    assert any("Door leaves are not reconstructed" in item for item in geometry["limitations"])
     if floor_plan.get("windows"):
         assert any("window" in item.lower() for item in geometry["limitations"])
         assert metadata["windows_included"] == len(floor_plan["windows"])

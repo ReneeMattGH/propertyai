@@ -14,6 +14,7 @@ import {
   type RoomGraph,
   type SceneBundle,
   type SceneFloor,
+  type StairRun,
 } from '@/lib/reconstruction'
 import {
   PITCH_LIMIT,
@@ -88,6 +89,7 @@ interface FloorScene {
   collision: CollisionData
   roomGraph: RoomGraph
   furniture: FurnitureItem[]
+  stairs: StairRun[]
   spawn: { x: number; z: number; yaw: number }
 }
 
@@ -336,6 +338,11 @@ function floorSceneFromBundle(
     )
   const spawn = floor.collision?.spawn ?? bundle.collision.spawn
   const footprint = floor.collision?.footprint ?? bundle.collision.footprint
+  const stairs = onFloor(
+    (bundle.collision.stairs ?? []).filter(
+      (stair) => stair.walkable && stair.path_m.length >= 2,
+    ),
+  )
   return {
     index: floor.index,
     label: floor.label || `Floor ${floor.index + 1}`,
@@ -349,6 +356,7 @@ function floorSceneFromBundle(
       furniture: onFloor(bundle.collision.furniture ?? []),
       spawn,
       footprint,
+      stairs,
       wall_height: floor.collision?.wall_height ?? bundle.collision.wall_height,
       door_height: floor.collision?.door_height ?? bundle.collision.door_height,
     },
@@ -358,6 +366,7 @@ function floorSceneFromBundle(
       edges: onFloor(bundle.room_graph.edges),
     },
     furniture: onFloor(bundle.furniture ?? []),
+    stairs,
     spawn: { x: spawn.position[0], z: spawn.position[2], yaw: spawn.yaw },
   }
 }
@@ -408,6 +417,101 @@ function resolveSpawn(point: Point2, walls: WallBox[], footprint?: Footprint): P
     }
   }
   return point
+}
+
+interface StairSample {
+  stair: StairRun
+  distance: number
+  segment: number
+  t: number
+  fraction: number
+}
+
+function sampleStair(stair: StairRun, x: number, z: number): StairSample | null {
+  const path = stair.path_m
+  if (!path || path.length < 2) return null
+  const lengths: number[] = []
+  let total = 0
+  for (let index = 1; index < path.length; index += 1) {
+    const length = Math.hypot(
+      path[index][0] - path[index - 1][0],
+      path[index][1] - path[index - 1][1],
+    )
+    lengths.push(length)
+    total += length
+  }
+  if (total < 0.1) return null
+  let best: StairSample | null = null
+  let cumulative = 0
+  for (let index = 1; index < path.length; index += 1) {
+    const [ax, az] = path[index - 1]
+    const [bx, bz] = path[index]
+    const dx = bx - ax
+    const dz = bz - az
+    const lengthSq = dx * dx + dz * dz
+    const t =
+      lengthSq > 1e-9
+        ? Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / lengthSq))
+        : 0
+    const px = ax + dx * t
+    const pz = az + dz * t
+    const distance = Math.hypot(x - px, z - pz)
+    if (!best || distance < best.distance) {
+      best = {
+        stair,
+        distance,
+        segment: index - 1,
+        t,
+        fraction: (cumulative + lengths[index - 1] * t) / total,
+      }
+    }
+    cumulative += lengths[index - 1]
+  }
+  return best
+}
+
+// Height above the storey floor at a point on the stair, following the
+// detected run so the landing stays flat and the descent goes below the slab.
+function stairSurface(stair: StairRun, sample: StairSample): number {
+  const rise = Math.max(0.5, Number(stair.rise_m) || 0)
+  const heights = stair.path_rise
+  const start =
+    heights.length === stair.path_m.length
+      ? heights[sample.segment]
+      : sample.segment / Math.max(1, stair.path_m.length - 1)
+  const end =
+    heights.length === stair.path_m.length
+      ? heights[sample.segment + 1] ?? 1
+      : 1
+  const fraction = start + (end - start) * sample.t
+  return rise * (stair.direction === 'down' ? fraction - 1 : fraction)
+}
+
+function stairCorridor(stair: StairRun): number {
+  return Math.max(0.24, (Number(stair.width_m) || 1) / 2 - PLAYER_RADIUS * 0.4)
+}
+
+function stairKey(stair: StairRun): string {
+  return stair.id != null
+    ? String(stair.id)
+    : `${stair.direction}:${stair.bottom_m[0]},${stair.bottom_m[1]}`
+}
+
+function stairLanding(stair: StairRun, end: 'top' | 'bottom', floor: FloorState): Point2 {
+  const path = stair.path_m
+  const from = end === 'top' ? path[path.length - 2] : path[1]
+  const to = end === 'top' ? path[path.length - 1] : path[0]
+  const dx = to[0] - from[0]
+  const dz = to[1] - from[1]
+  const length = Math.hypot(dx, dz)
+  const ux = length > 1e-6 ? dx / length : 0
+  const uz = length > 1e-6 ? dz / length : 0
+  for (const distance of [0.75, 0.55, 0.4, 0.25]) {
+    const x = to[0] + ux * distance
+    const z = to[1] + uz * distance
+    if (!isBlocked(x, z, PLAYER_RADIUS, floor.wallCollision)) return { x, z }
+  }
+  return resolveSpawn({ x: to[0], z: to[1] }, floor.wallCollision, floor.footprint)
 }
 
 interface FocalView {
@@ -677,6 +781,9 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                   collision: scene.collision,
                   roomGraph: scene.room_graph,
                   furniture: scene.furniture ?? [],
+                  stairs: (scene.collision.stairs ?? []).filter(
+                    (stair) => stair.walkable && stair.path_m.length >= 2,
+                  ),
                   spawn: {
                     x: scene.collision.spawn.position[0],
                     z: scene.collision.spawn.position[2],
@@ -1724,6 +1831,8 @@ async function buildRuntime(
     jumpQueued: false,
     currentRoomId: null as number | null,
     floorIndex: 0,
+    stairId: null as string | null,
+    stairCooldownUntil: 0,
     lightingPreset: options.lighting,
   }
 
@@ -1888,6 +1997,8 @@ async function buildRuntime(
     state.position.set(target.x, floor.yOffset + EYE_HEIGHT, target.z)
     state.velocity.set(0, 0)
     state.velocityY = 0
+    state.stairId = null
+    state.stairCooldownUntil = performance.now() + 400
     const fallback = longestSightYaw(
       target.x,
       target.z,
@@ -1923,6 +2034,8 @@ async function buildRuntime(
     state.position.set(candidate.x, floor.yOffset + EYE_HEIGHT, candidate.z)
     state.velocity.set(0, 0)
     state.velocityY = 0
+    state.stairId = null
+    state.stairCooldownUntil = performance.now() + 400
     state.pitch = spawnPitch
     state.yaw = floor.spawn.yaw
     return true
@@ -2315,21 +2428,97 @@ async function buildRuntime(
       runtime.position.z = moved.z
     }
 
-    const eyeLevel = activeFloor.yOffset + EYE_HEIGHT
-    if (runtime.jumpQueued && runtime.position.y <= eyeLevel + 1e-4) {
-      runtime.velocityY = JUMP_SPEED
+    let stair: StairRun | null = null
+    let stairSample: StairSample | null = null
+    if (state.stairId) {
+      const current = activeFloor.stairs.find(
+        (entry) => stairKey(entry) === state.stairId,
+      )
+      if (current) {
+        const sample = sampleStair(current, runtime.position.x, runtime.position.z)
+        if (sample && sample.distance <= stairCorridor(current) + 0.22) {
+          stair = current
+          stairSample = sample
+        }
+      }
+      if (!stair) state.stairId = null
     }
-    runtime.jumpQueued = false
-    runtime.velocityY -= GRAVITY * delta
-    runtime.position.y += runtime.velocityY * delta
-    const ceilingLimit = Math.max(eyeLevel, activeFloor.yOffset + wallHeight - 0.12)
-    if (runtime.position.y > ceilingLimit) {
-      runtime.position.y = ceilingLimit
-      runtime.velocityY = Math.min(0, runtime.velocityY)
+    if (!stair && now >= state.stairCooldownUntil) {
+      // Enter a stair only from its near end and only when the first tread is
+      // within reach of the player's feet, so walking beneath a flight cannot
+      // lift the camera onto it.
+      const footY = runtime.position.y - EYE_HEIGHT
+      for (const candidate of activeFloor.stairs) {
+        if (!candidate.walkable || candidate.link_floor == null) continue
+        const sample = sampleStair(candidate, runtime.position.x, runtime.position.z)
+        if (!sample || sample.distance > stairCorridor(candidate)) continue
+        const surface = activeFloor.yOffset + stairSurface(candidate, sample)
+        const endPoint = candidate.direction === 'up' ? candidate.bottom_m : candidate.top_m
+        const atEnd = Math.hypot(
+          runtime.position.x - endPoint[0],
+          runtime.position.z - endPoint[1],
+        ) <= Math.max(0.55, stairCorridor(candidate) + 0.2)
+        if (!atEnd && Math.abs(surface - footY) > 0.2) continue
+        if (Math.abs(surface - footY) > 0.6) continue
+        stair = candidate
+        stairSample = sample
+        state.stairId = stairKey(candidate)
+        break
+      }
     }
-    if (runtime.position.y <= eyeLevel) {
+
+    let stairHeight: number | null = null
+    if (stair && stairSample) {
+      stairHeight = stairSurface(stair, stairSample)
+      const link = stair.link_floor
+      const target =
+        link == null ? null : floorStates.find((entry) => entry.index === link) ?? null
+      if (target && stair.direction === 'up' && stairSample.fraction >= 0.985) {
+        const landing = stairLanding(stair, 'top', target)
+        activateFloor(target.index)
+        state.position.set(landing.x, target.yOffset + EYE_HEIGHT, landing.z)
+        state.velocity.set(0, 0)
+        state.velocityY = 0
+        state.stairId = null
+        state.stairCooldownUntil = now + 700
+        stair = null
+        stairSample = null
+        stairHeight = null
+      } else if (target && stair.direction === 'down' && stairSample.fraction <= 0.015) {
+        const landing = stairLanding(stair, 'bottom', target)
+        activateFloor(target.index)
+        state.position.set(landing.x, target.yOffset + EYE_HEIGHT, landing.z)
+        state.velocity.set(0, 0)
+        state.velocityY = 0
+        state.stairId = null
+        state.stairCooldownUntil = now + 700
+        stair = null
+        stairSample = null
+        stairHeight = null
+      }
+    }
+
+    const eyeLevel = activeFloor.yOffset + EYE_HEIGHT + (stairHeight ?? 0)
+    if (stairHeight !== null) {
       runtime.position.y = eyeLevel
       runtime.velocityY = 0
+      runtime.jumpQueued = false
+    } else {
+      if (runtime.jumpQueued && runtime.position.y <= eyeLevel + 1e-4) {
+        runtime.velocityY = JUMP_SPEED
+      }
+      runtime.jumpQueued = false
+      runtime.velocityY -= GRAVITY * delta
+      runtime.position.y += runtime.velocityY * delta
+      const ceilingLimit = Math.max(eyeLevel, activeFloor.yOffset + wallHeight - 0.12)
+      if (runtime.position.y > ceilingLimit) {
+        runtime.position.y = ceilingLimit
+        runtime.velocityY = Math.min(0, runtime.velocityY)
+      }
+      if (runtime.position.y <= eyeLevel) {
+        runtime.position.y = eyeLevel
+        runtime.velocityY = 0
+      }
     }
 
     applyCamera()

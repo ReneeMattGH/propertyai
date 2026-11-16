@@ -903,6 +903,18 @@ class ImprovedFloorPlanParser:
             )
 
         warnings = list(dict.fromkeys(warnings))
+        stairs: List[Dict] = []
+        try:
+            from stairs import detect_stairs
+
+            stairs = detect_stairs(image, (origin_x, origin_y), scale)
+        except Exception as exc:  # Detection is additive; never block a plan.
+            warnings.append(f"Stair detection was skipped: {exc}")
+        if stairs:
+            warnings.append(
+                f"{len(stairs)} staircase region(s) were detected in the plan and will be "
+                "reconstructed with treads and a slab opening where a connecting floor exists."
+            )
         self._save_success_diagnostics(
             diagnostics_dir,
             image,
@@ -952,6 +964,7 @@ class ImprovedFloorPlanParser:
             "doorways": doorways,
             "windows": windows,
             "openings": openings,
+            "stairs": stairs,
             "segmentation": segmentation_info,
             "warnings": warnings,
         }
@@ -3192,6 +3205,13 @@ class ImprovedFloorPlanParser:
         emit("validating_layout")
 
         warnings = list(dict.fromkeys(warnings))
+        stairs: List[Dict] = []
+        try:
+            from stairs import detect_stairs
+
+            stairs = detect_stairs(image, (origin_x, origin_y), scale)
+        except Exception as exc:
+            warnings.append(f"Stair detection was skipped: {exc}")
         return {
             "status": "completed",
             "image_dimensions": [int(width), int(height)],
@@ -3213,6 +3233,7 @@ class ImprovedFloorPlanParser:
             "doorways": doorway_records,
             "windows": [],
             "openings": [],
+            "stairs": stairs,
             "segmentation": {
                 "source": "manual_outline",
                 "selected_attempt": "manual",

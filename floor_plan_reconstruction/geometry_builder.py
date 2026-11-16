@@ -26,7 +26,7 @@ import math
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import trimesh
@@ -131,6 +131,214 @@ def _box(extents: Tuple[float, float, float], center: Tuple[float, float, float]
     mesh = trimesh.creation.box(extents=extents)
     mesh.apply_translation(center)
     return mesh
+
+
+def _rect_polygon(rect: Sequence[float]) -> Polygon:
+    x, z, width, depth = [float(value) for value in rect[:4]]
+    return Polygon(
+        [[x, z], [x + width, z], [x + width, z + depth], [x, z + depth]]
+    )
+
+
+def _subtract_openings(
+    polygon: Polygon, openings: Sequence[Sequence[float]]
+) -> List[Polygon]:
+    """Remove stair-shaft rectangles from a floor or ceiling slab."""
+    result = polygon
+    for rect in openings:
+        hole = _rect_polygon(rect)
+        if not result.intersects(hole):
+            continue
+        result = result.difference(hole)
+        if result.is_empty:
+            return []
+    if result.geom_type == "MultiPolygon":
+        parts = [part for part in result.geoms if part.area > 0.05]
+    elif result.geom_type == "Polygon" and result.area > 0.05:
+        parts = [result]
+    else:
+        return []
+    cleaned: List[Polygon] = []
+    for part in parts:
+        if not part.is_valid:
+            part = part.buffer(0)
+        if part.geom_type == "Polygon" and part.area > 0.05:
+            cleaned.append(part)
+        elif part.geom_type == "MultiPolygon":
+            cleaned.extend(
+                piece for piece in part.geoms if piece.area > 0.05
+            )
+    return cleaned
+
+
+def _rail_segment(
+    start: Sequence[float], end: Sequence[float], radius: float = 0.022
+) -> Optional[trimesh.Trimesh]:
+    start_arr = np.asarray(start, dtype=float)
+    end_arr = np.asarray(end, dtype=float)
+    vector = end_arr - start_arr
+    length = float(np.linalg.norm(vector))
+    if length <= 1e-5:
+        return None
+    mesh = trimesh.creation.cylinder(radius=radius, height=length, sections=8)
+    transform = trimesh.geometry.align_vectors([0.0, 0.0, 1.0], vector / length)
+    mesh.apply_transform(transform)
+    mesh.apply_translation((start_arr + end_arr) / 2)
+    return mesh
+
+
+def _point_segment_distance(
+    x: float, z: float, start: Sequence[float], end: Sequence[float]
+) -> float:
+    ax, az = float(start[0]), float(start[1])
+    bx, bz = float(end[0]), float(end[1])
+    dx, dz = bx - ax, bz - az
+    length_sq = dx * dx + dz * dz
+    if length_sq <= 1e-9:
+        return math.hypot(x - ax, z - az)
+    t = max(0.0, min(1.0, ((x - ax) * dx + (z - az) * dz) / length_sq))
+    return math.hypot(x - (ax + t * dx), z - (az + t * dz))
+
+
+def _wall_clearance(x: float, z: float, walls: Sequence[Dict]) -> float:
+    best = float("inf")
+    for wall in walls:
+        best = min(
+            best,
+            _point_segment_distance(x, z, wall["start_m"], wall["end_m"]),
+        )
+    return best
+
+
+def _stair_parts(
+    stair: Dict,
+    walls: Sequence[Dict],
+    floor_material,
+    wood_tile: float,
+) -> Tuple[List[trimesh.Trimesh], List[trimesh.Trimesh]]:
+    """Build open-riser treads, a landing, stringers and railings."""
+    path = [[float(point[0]), float(point[1])] for point in stair.get("path_m") or []]
+    flights = stair.get("flights") or []
+    rise = float(stair.get("rise_m") or 3.0)
+    if len(path) < 2 or not flights:
+        return [], []
+    if len(path) >= 5:
+        segments = [
+            (path[0], path[1], float(flights[0]["width_m"]), 0.0, 1.0),
+            (path[3], path[4], float(flights[-1]["width_m"]), 0.0, 1.0),
+        ]
+        bottom_run = math.dist(path[0], path[1])
+        top_run = math.dist(path[3], path[4])
+        landing_fraction = bottom_run / max(1e-6, bottom_run + top_run)
+        segments[0] = (*segments[0][:3], 0.0, landing_fraction)
+        segments[1] = (*segments[1][:3], landing_fraction, 1.0)
+        landing = [(path[1], path[2], float(flights[0]["width_m"])),
+                   (path[2], path[3], float(flights[-1]["width_m"]))]
+    else:
+        segments = [(path[0], path[-1], float(flights[0]["width_m"]), 0.0, 1.0)]
+        landing = []
+
+    total_steps = max(8, min(20, int(round(rise / 0.17))))
+    runs = [math.dist(segment[0], segment[1]) for segment in segments]
+    total_run = sum(runs) or 1.0
+    counts = [max(2, int(round(total_steps * run / total_run))) for run in runs]
+    if len(counts) > 1:
+        counts[-1] = max(2, total_steps - counts[0])
+
+    steps: List[trimesh.Trimesh] = []
+    trim: List[trimesh.Trimesh] = []
+    for index, (start, end, width, start_fraction, end_fraction) in enumerate(segments):
+        count = counts[index]
+        start_h = rise * start_fraction
+        end_h = rise * end_fraction
+        step_rise = (end_h - start_h) / count
+        dx = end[0] - start[0]
+        dz = end[1] - start[1]
+        run = math.hypot(dx, dz)
+        if run <= 1e-5:
+            continue
+        ux, uz = dx / run, dz / run
+        px, pz = -uz, ux
+        # Put the open-side railing opposite the nearest wall.
+        mid_x = (start[0] + end[0]) / 2
+        mid_z = (start[1] + end[1]) / 2
+        side = 1.0
+        if _wall_clearance(mid_x + px * (width / 2 + 0.2), mid_z + pz * (width / 2 + 0.2), walls) < _wall_clearance(
+            mid_x - px * (width / 2 + 0.2), mid_z - pz * (width / 2 + 0.2), walls
+        ):
+            side = -1.0
+        for step_index in range(count):
+            center_x = start[0] + ux * run * (step_index + 0.5) / count
+            center_z = start[1] + uz * run * (step_index + 0.5) / count
+            top = start_h + step_rise * (step_index + 1)
+            depth = run / count + 0.02
+            if abs(ux) >= abs(uz):
+                extents = (depth, 0.18, width)
+            else:
+                extents = (width, 0.18, depth)
+            steps.append(
+                _uv_box(
+                    extents,
+                    (center_x, top - 0.09, center_z),
+                    wood_tile,
+                    floor_material,
+                )
+            )
+        # Inclined stringers make the open risers read as a built stair.
+        for sign in (-1.0, 1.0):
+            offset_x = px * sign * (width / 2 - 0.03)
+            offset_z = pz * sign * (width / 2 - 0.03)
+            beam = _rail_segment(
+                (start[0] + offset_x, start_h + 0.06, start[1] + offset_z),
+                (end[0] + offset_x, end_h + 0.06, end[1] + offset_z),
+                radius=0.055,
+            )
+            if beam is not None:
+                trim.append(beam)
+        rail_offset_x = px * side * (width / 2 - 0.04)
+        rail_offset_z = pz * side * (width / 2 - 0.04)
+        rail = _rail_segment(
+            (start[0] + rail_offset_x, start_h + 0.98, start[1] + rail_offset_z),
+            (end[0] + rail_offset_x, end_h + 0.98, end[1] + rail_offset_z),
+            radius=0.024,
+        )
+        if rail is not None:
+            trim.append(rail)
+        for post_index in range(4):
+            t = post_index / 3
+            post_x = start[0] + dx * t + rail_offset_x
+            post_z = start[1] + dz * t + rail_offset_z
+            post_h = start_h + (end_h - start_h) * t
+            trim.append(
+                _box(
+                    (0.04, 0.96, 0.04),
+                    (post_x, post_h + 0.5, post_z),
+                )
+            )
+
+    if landing:
+        landing_h = rise * segments[1][3] if len(segments) > 1 else rise * 0.5
+        for start, end, width in landing:
+            dx = end[0] - start[0]
+            dz = end[1] - start[1]
+            length = math.hypot(dx, dz)
+            if length <= 1e-5:
+                continue
+            center_x = (start[0] + end[0]) / 2
+            center_z = (start[1] + end[1]) / 2
+            if abs(dx) >= abs(dz):
+                extents = (length + 0.04, 0.18, width)
+            else:
+                extents = (width, 0.18, length + 0.04)
+            steps.append(
+                _uv_box(
+                    extents,
+                    (center_x, landing_h - 0.09, center_z),
+                    wood_tile,
+                    floor_material,
+                )
+            )
+    return steps, trim
 
 
 def _textured_box(
@@ -466,6 +674,17 @@ class GeometryBuilder:
         walls = floor_plan_result.get("wall_segments", [])
         doorways = floor_plan_result.get("doorways", [])
         windows = floor_plan_result.get("windows", [])
+        stairs = floor_plan_result.get("stairs") or []
+        floor_openings = [
+            entry.get("rect_m")
+            for entry in (floor_plan_result.get("stair_openings") or [])
+            if entry.get("rect_m")
+        ]
+        ceiling_openings = [
+            stair.get("opening_m")
+            for stair in stairs
+            if stair.get("render") and stair.get("opening_m")
+        ]
         if not rooms:
             raise GeometryBuildError("No rooms available to build geometry")
         if not walls:
@@ -494,8 +713,10 @@ class GeometryBuilder:
             "Only axis-aligned walls detected in the floor plan are reconstructed."
         )
         limitations.append(
-            "Door leaves and stairs are not reconstructed. Windows are rendered as "
-            "openings with inferred sill/head heights and tinted glazing."
+            "Door leaves are not reconstructed. Stairs are reconstructed only where a "
+            "detected staircase connects two parsed storeys; stairs leading to a level "
+            "outside the uploaded plans are left out of the walkthrough. Windows are "
+            "rendered as openings with inferred sill/head heights and tinted glazing."
         )
         limitations.append(
             "Furniture is original procedural geometry from a reusable library, placed "
@@ -540,6 +761,9 @@ class GeometryBuilder:
             use_photo_floor_textures=use_photo_floor_textures,
             room_metadata=room_metadata,
             style=style,
+            stairs=stairs,
+            floor_openings=floor_openings,
+            ceiling_openings=ceiling_openings,
         )
         if furnishing.get("items"):
             emit("placing_furniture")
@@ -551,7 +775,13 @@ class GeometryBuilder:
         if spawn is None:
             raise GeometryBuildError("No room has a usable walkable spawn area")
         collision = self._build_collision(
-            rooms, walls, doorways, floor_plan_result, windows, spawn=spawn
+            rooms,
+            walls,
+            doorways,
+            floor_plan_result,
+            windows,
+            spawn=spawn,
+            stairs=stairs,
         )
         collision = self._apply_collision_metadata(collision, room_metadata)
         collision["furniture"] = furniture_collision_items(furnishing)
@@ -741,6 +971,13 @@ class GeometryBuilder:
                 "pixels_per_meter": floor_plan_result.get("scale_pixels_per_meter"),
                 "source": floor_plan_result.get("scale_source"),
                 "verified": floor_plan_result.get("scale_verified", False),
+            },
+            "stairs": {
+                "detected": len(stairs),
+                "rendered": sum(1 for stair in stairs if stair.get("render")),
+                "walkable_links": sum(1 for stair in stairs if stair.get("walkable")),
+                "floor_openings": len(floor_openings),
+                "ceiling_openings": len(ceiling_openings),
             },
             "footprint_m": floor_plan_result.get("footprint_m"),
         }
@@ -1027,11 +1264,17 @@ class GeometryBuilder:
         use_photo_floor_textures: bool = False,
         room_metadata: Optional[Dict[int, Dict]] = None,
         style: str = "modern",
+        stairs: Optional[List[Dict]] = None,
+        floor_openings: Optional[List[Sequence[float]]] = None,
+        ceiling_openings: Optional[List[Sequence[float]]] = None,
     ) -> Dict:
         room_textures = room_textures or {}
         room_metadata = room_metadata or {}
         style = style if style in STYLES else "modern"
         windows = windows or []
+        stairs = stairs or []
+        floor_openings = floor_openings or []
+        ceiling_openings = ceiling_openings or []
         floor_meshes: List[trimesh.Trimesh] = []
         ceiling_meshes: List[trimesh.Trimesh] = []
         wall_boxes: List[trimesh.Trimesh] = []
@@ -1062,19 +1305,42 @@ class GeometryBuilder:
             if polygon is None:
                 continue
             room_id = int(room["id"])
+            floor_polygons = _subtract_openings(polygon, floor_openings)
+            ceiling_polygons = _subtract_openings(polygon, ceiling_openings)
             try:
-                floor_meshes.append(_extrude_flat(polygon, -FLOOR_THICKNESS, FLOOR_THICKNESS))
-                ceiling_meshes.append(
-                    _extrude_flat(polygon, WALL_HEIGHT - CEILING_THICKNESS, CEILING_THICKNESS)
-                )
+                for slab in floor_polygons:
+                    floor_meshes.append(
+                        _extrude_flat(slab, -FLOOR_THICKNESS, FLOOR_THICKNESS)
+                    )
+                for slab in ceiling_polygons:
+                    ceiling_meshes.append(
+                        _extrude_flat(
+                            slab,
+                            WALL_HEIGHT - CEILING_THICKNESS,
+                            CEILING_THICKNESS,
+                        )
+                    )
             except Exception:
                 # Degenerate contours can defeat triangulation; fall back to the room bounds.
                 x, z, w, d = room["bounds_m"]
                 fallback = Polygon([[x, z], [x + w, z], [x + w, z + d], [x, z + d]])
-                floor_meshes.append(_extrude_flat(fallback, -FLOOR_THICKNESS, FLOOR_THICKNESS))
-                ceiling_meshes.append(
-                    _extrude_flat(fallback, WALL_HEIGHT - CEILING_THICKNESS, CEILING_THICKNESS)
-                )
+                floor_polygons = _subtract_openings(fallback, floor_openings)
+                ceiling_polygons = _subtract_openings(fallback, ceiling_openings)
+                try:
+                    for slab in floor_polygons:
+                        floor_meshes.append(
+                            _extrude_flat(slab, -FLOOR_THICKNESS, FLOOR_THICKNESS)
+                        )
+                    for slab in ceiling_polygons:
+                        ceiling_meshes.append(
+                            _extrude_flat(
+                                slab,
+                                WALL_HEIGHT - CEILING_THICKNESS,
+                                CEILING_THICKNESS,
+                            )
+                        )
+                except Exception:
+                    continue
                 polygon = fallback
             room_polygons.append((room_id, polygon))
             room_type = str(
@@ -1084,23 +1350,25 @@ class GeometryBuilder:
             ).lower()
             texture = room_textures.get(room.get("id"))
             floor_kind = "floor_tile" if room_type in TILE_ROOM_TYPES else "floor_wood"
-            floor_surfaces[floor_kind].append(
-                _uv_polygon(
-                    polygon,
-                    0.004,
-                    tile_size(floor_kind),
-                    floor_materials[floor_kind],
+            for slab in floor_polygons:
+                floor_surfaces[floor_kind].append(
+                    _uv_polygon(
+                        slab,
+                        0.004,
+                        tile_size(floor_kind),
+                        floor_materials[floor_kind],
+                    )
                 )
-            )
-            ceiling_surfaces.append(
-                _uv_polygon(
-                    polygon,
-                    WALL_HEIGHT - CEILING_THICKNESS - 0.004,
-                    tile_size("ceiling_plaster"),
-                    ceiling_material,
-                    downward=True,
+            for slab in ceiling_polygons:
+                ceiling_surfaces.append(
+                    _uv_polygon(
+                        slab,
+                        WALL_HEIGHT - CEILING_THICKNESS - 0.004,
+                        tile_size("ceiling_plaster"),
+                        ceiling_material,
+                        downward=True,
+                    )
                 )
-            )
             if texture and use_photo_floor_textures and texture.get("floor_image") is not None:
                 try:
                     photo_plane = _textured_polygon(
@@ -1113,6 +1381,27 @@ class GeometryBuilder:
                     group["meshes"].append(photo_plane)
                 except Exception:
                     pass
+
+        stair_steps: List[trimesh.Trimesh] = []
+        stair_trim: List[trimesh.Trimesh] = []
+        rendered_stairs = 0
+        for stair in stairs:
+            if not stair.get("render"):
+                continue
+            try:
+                steps, trim = _stair_parts(
+                    stair,
+                    walls,
+                    floor_materials["floor_wood"],
+                    tile_size("floor_wood"),
+                )
+            except Exception:
+                continue
+            if not steps:
+                continue
+            rendered_stairs += 1
+            stair_steps.extend(steps)
+            stair_trim.extend(trim)
 
         doors_by_orientation = {
             "horizontal": [d for d in doorways if d.get("orientation") == "horizontal"],
@@ -1568,6 +1857,14 @@ class GeometryBuilder:
         if glass_boxes:
             windows_mesh = _merge_uv(glass_boxes, glass_material)
             scene.add_geometry(windows_mesh, node_name="Windows", geom_name="Windows")
+        if stair_steps:
+            stair_mesh = _merge_uv(stair_steps, floor_materials["floor_wood"])
+            scene.add_geometry(stair_mesh, node_name="Stairs", geom_name="Stairs")
+        if stair_trim:
+            stair_trim_mesh = _merge_uv(stair_trim, trim_material)
+            scene.add_geometry(
+                stair_trim_mesh, node_name="StairRailings", geom_name="StairRailings"
+            )
         for index, group in textured_walls.items():
             walls_mesh = _merge_textured(group["meshes"], group["image"])
             name = f"Walls_photo_{index:02d}"
@@ -1600,6 +1897,8 @@ class GeometryBuilder:
                 "windows_rendered": rendered_windows,
                 "windows_requested": len(windows),
                 "glass_panes": len(glass_boxes),
+                "stairs": rendered_stairs,
+                "stair_steps": len(stair_steps),
                 "bounds": bounds.tolist() if bounds is not None else None,
             },
         }
@@ -1730,8 +2029,10 @@ class GeometryBuilder:
         floor_plan_result: Dict,
         windows: Optional[List[Dict]] = None,
         spawn: Optional[Dict] = None,
+        stairs: Optional[List[Dict]] = None,
     ) -> Dict:
         windows = windows or []
+        stairs = stairs or []
         thickness_scale = 1.0
         doors_by_orientation = {"horizontal": [], "vertical": []}
         for door in doorways:
@@ -1836,6 +2137,43 @@ class GeometryBuilder:
         if room_doors:
             door_x, door_z = room_doors[0]["position"]
             yaw = float(np.arctan2(-(door_x - spawn_x), -(door_z - spawn_z)))
+        stair_entries = []
+        for stair in stairs:
+            path = [
+                [round(float(point[0]), 3), round(float(point[1]), 3)]
+                for point in (stair.get("path_m") or [])
+                if point and len(point) >= 2
+            ]
+            if len(path) < 2:
+                continue
+            path_rise = [float(value) for value in (stair.get("path_rise") or [])]
+            if len(path_rise) != len(path):
+                path_rise = [index / (len(path) - 1) for index in range(len(path))]
+            bottom = (stair.get("bottom_m") or path[0])[:2]
+            top = (stair.get("top_m") or path[-1])[:2]
+            opening = (stair.get("opening_m") or [])[:4]
+            stair_entries.append(
+                {
+                    "id": stair.get("id"),
+                    "floor": stair.get("floor"),
+                    "floor_label": stair.get("floor_label"),
+                    "direction": stair.get("direction") or "up",
+                    "link_floor": stair.get("link_floor"),
+                    "source_floor": stair.get("source_floor"),
+                    "render": bool(stair.get("render")),
+                    "walkable": bool(stair.get("walkable")),
+                    "width_m": round(float(stair.get("width_m") or 1.0), 3),
+                    "rise_m": round(float(stair.get("rise_m") or WALL_HEIGHT), 3),
+                    "run_m": round(float(stair.get("run_m") or 0.0), 3),
+                    "bottom_m": [round(float(value), 3) for value in bottom],
+                    "top_m": [round(float(value), 3) for value in top],
+                    "path_m": path,
+                    "path_rise": [round(float(value), 4) for value in path_rise],
+                    "opening_m": [round(float(value), 3) for value in opening]
+                    if len(opening) == 4
+                    else None,
+                }
+            )
         return {
             "units": "meters",
             "walls": collision_walls,
@@ -1854,6 +2192,7 @@ class GeometryBuilder:
                 "yaw": round(yaw, 4),
                 "room_id": int(spawn_room["id"]),
             },
+            "stairs": stair_entries,
             "footprint": floor_plan_result.get("footprint_m"),
             "wall_height": WALL_HEIGHT,
             "door_height": DOOR_HEIGHT,

@@ -335,6 +335,26 @@ export interface CollisionFurniture {
   y_offset?: number
 }
 
+export interface StairRun {
+  id?: string | number | null
+  floor?: number
+  floor_label?: string
+  y_offset?: number
+  direction: 'up' | 'down'
+  link_floor?: number | null
+  source_floor?: number | null
+  render?: boolean
+  walkable?: boolean
+  width_m: number
+  rise_m: number
+  run_m: number
+  bottom_m: [number, number]
+  top_m: [number, number]
+  path_m: [number, number][]
+  path_rise: number[]
+  opening_m?: [number, number, number, number] | null
+}
+
 export interface CollisionData {
   units: string
   walls: CollisionWall[]
@@ -343,6 +363,7 @@ export interface CollisionData {
   furniture?: CollisionFurniture[]
   furniture_style?: string
   spawn: { position: [number, number, number]; yaw: number; floor?: number; y_offset?: number }
+  stairs?: StairRun[]
   footprint?: { width: number; height: number }
   wall_height: number
   door_height: number

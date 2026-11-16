@@ -39,7 +39,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -552,6 +552,106 @@ def _floor_plan_diagnostics(per_floor: List[Dict]) -> Dict:
     }
 
 
+def _rect_iou(first: Sequence[float], second: Sequence[float]) -> float:
+    ax, az, aw, ad = [float(value) for value in first[:4]]
+    bx, bz, bw, bd = [float(value) for value in second[:4]]
+    overlap_w = max(0.0, min(ax + aw, bx + bw) - max(ax, bx))
+    overlap_d = max(0.0, min(az + ad, bz + bd) - max(az, bz))
+    intersection = overlap_w * overlap_d
+    union = aw * ad + bw * bd - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+def _link_floor_stairs(per_floor: List[Dict]) -> List[str]:
+    """Pair stairs that occupy the same footprint on consecutive storeys.
+
+    Only paired stairs get real geometry and floor traversal: an unpaired
+    staircase on the top storey would climb into a level that is not part of
+    the reconstruction.
+    """
+    warnings: List[str] = []
+    for lower_index in range(len(per_floor) - 1):
+        upper_index = lower_index + 1
+        lower = per_floor[lower_index]
+        upper = per_floor[upper_index]
+        lower_stairs = lower.get("stairs") or []
+        upper_stairs = upper.get("stairs") or []
+        used_upper = set()
+        for stair in lower_stairs:
+            stair.setdefault("render", False)
+        for stair in upper_stairs:
+            stair.setdefault("render", False)
+        candidates = [
+            (stair, other, _rect_iou(stair.get("bbox_m") or [], other.get("bbox_m") or []))
+            for stair in lower_stairs
+            if not stair.get("ambiguous_width")
+            for other in upper_stairs
+            if not other.get("ambiguous_width")
+        ]
+        candidates.sort(key=lambda entry: entry[2], reverse=True)
+        for lower_stair, upper_stair, score in candidates:
+            if score < 0.45 or lower_stair.get("link_floor") is not None:
+                continue
+            upper_key = id(upper_stair)
+            if upper_key in used_upper:
+                continue
+            used_upper.add(upper_key)
+            lower_stair.update(
+                {
+                    "render": True,
+                    "walkable": True,
+                    "direction": "up",
+                    "link_floor": upper_index,
+                    "rise_m": FLOOR_HEIGHT_M,
+                }
+            )
+            down_stair = copy.deepcopy(lower_stair)
+            down_stair.update(
+                {
+                    "render": False,
+                    "walkable": True,
+                    "direction": "down",
+                    "link_floor": lower_index,
+                    "rise_m": FLOOR_HEIGHT_M,
+                    "source_floor": lower_index,
+                }
+            )
+            # Replace the duplicate detection on the upper storey; the stair
+            # itself is drawn once in the lower floor's GLB.
+            index = upper_stairs.index(upper_stair)
+            upper_stairs[index] = down_stair
+            upper["stairs"] = upper_stairs
+            opening = lower_stair.get("opening_m")
+            if opening:
+                # The two storeys are parsed and scaled independently, so the
+                # upper slab cut is padded to tolerate a small registration
+                # offset without the top treads intersecting the slab.
+                upper.setdefault("stair_openings", []).append(
+                    {
+                        "id": lower_stair.get("id"),
+                        "from_floor": lower_index,
+                        "rect_m": [
+                            round(float(opening[0]) - 0.15, 3),
+                            round(float(opening[1]) - 0.15, 3),
+                            round(float(opening[2]) + 0.3, 3),
+                            round(float(opening[3]) + 0.3, 3),
+                        ],
+                    }
+                )
+            warnings.append(
+                f"{lower.get('floor_label') or _floor_label(lower_index)}: staircase "
+                f"linked to {upper.get('floor_label') or _floor_label(upper_index)} "
+                f"({lower_stair.get('treads', '?')} treads, rise {FLOOR_HEIGHT_M:.1f} m)."
+            )
+        for stair in upper_stairs:
+            if not stair.get("walkable"):
+                warnings.append(
+                    f"{upper.get('floor_label') or _floor_label(upper_index)}: a staircase "
+                    "leads to a level outside this reconstruction and is left unwalkable."
+                )
+    return warnings
+
+
 def _combine_floor_plans(per_floor: List[Dict]) -> Dict:
     """Merge individually parsed storeys into one plan for room-type review.
 
@@ -586,6 +686,7 @@ def _combine_floor_plans(per_floor: List[Dict]) -> Dict:
         "doorways": [],
         "windows": [],
         "openings": [],
+        "stairs": [],
         "label_hints": [],
         "warnings": [],
         "floors": [],
@@ -650,6 +751,11 @@ def _combine_floor_plans(per_floor: List[Dict]) -> Dict:
             if entry.get("room") is not None:
                 entry["room"] = int(entry["room"]) + offset
             combined["openings"].append(entry)
+        for stair in plan.get("stairs") or []:
+            entry = copy.deepcopy(stair)
+            entry["floor"] = index
+            entry["floor_label"] = label
+            combined["stairs"].append(entry)
         for hint in plan.get("label_hints") or []:
             entry = copy.deepcopy(hint)
             entry["room_id"] = int(hint["room_id"]) + offset
@@ -1485,6 +1591,20 @@ class ReconstructionPipeline:
                     )
 
                 if multi_floor:
+                    for stair_warning in _link_floor_stairs(per_floor):
+                        log_event(job_id, stair_warning)
+                        per_floor[0]["warnings"].append(stair_warning)
+                    for index, plan in enumerate(per_floor):
+                        (
+                            GEOMETRY_DIR
+                            / job_id
+                            / "floors"
+                            / f"floor_{index}"
+                            / "floor_plan.json"
+                        ).write_text(json.dumps(plan, indent=2))
+                        (GEOMETRY_DIR / job_id / f"floor_plan_floor_{index}.json").write_text(
+                            json.dumps(plan, indent=2)
+                        )
                     floor_plan_result = _combine_floor_plans(per_floor)
                     prepared_plan_path.write_text(
                         json.dumps(floor_plan_result, indent=2)
@@ -1712,6 +1832,7 @@ class ReconstructionPipeline:
                     furnishing_style,
                     furnishing_variant,
                     allow_partial=allow_partial,
+                    stairs=plan.get("stairs") or [],
                 )
 
             async def _furnish(
@@ -2336,6 +2457,7 @@ class ReconstructionPipeline:
                     furnishing_style,
                     furnishing_variant,
                     allow_partial=allow_partial,
+                    stairs=plan.get("stairs") or [],
                 )
 
             def _repair_progress(event, payload, _label=label):
@@ -2610,6 +2732,7 @@ class ReconstructionPipeline:
             "furniture": [],
             "spawn": None,
             "footprint": {"width": 0.0, "height": 0.0},
+            "stairs": [],
             "wall_height": None,
             "door_height": None,
             "furniture_style": style,
@@ -2688,6 +2811,15 @@ class ReconstructionPipeline:
                         **item,
                         "item_id": f"f{index}_{item.get('item_id')}",
                         "room_id": int(item["room_id"]) + offset,
+                        "floor": index,
+                        "floor_label": result["label"],
+                        "y_offset": y_offset,
+                    }
+                )
+            for stair in collision.get("stairs") or []:
+                merged_collision["stairs"].append(
+                    {
+                        **stair,
                         "floor": index,
                         "floor_label": result["label"],
                         "y_offset": y_offset,
@@ -2834,9 +2966,10 @@ class ReconstructionPipeline:
             dict.fromkeys(
                 limitation_items
                 + [
-                    "Floors are stacked at a fixed 3.0 m storey height. Stairs, ramps "
-                    "and lift cores are not modelled; use the floor switcher to move "
-                    "between storeys."
+                    "Floors are stacked at a fixed 3.0 m storey height. Detected "
+                    "staircases are reconstructed and walkable where they connect two "
+                    "parsed storeys; ramps and lift cores are not modelled, so use the "
+                    "floor switcher for those."
                 ]
             )
         )

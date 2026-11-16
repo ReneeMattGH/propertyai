@@ -213,6 +213,7 @@ class RoomLayout:
         spawn_room_id: Optional[int],
         style: str,
         windows: Sequence[Dict] = (),
+        stairs: Sequence[Dict] = (),
     ):
         self.room = room
         self.room_id = int(room["id"])
@@ -246,10 +247,31 @@ class RoomLayout:
             for zone in window_protection_zones(windows, self.room_id)
             if _rect_overlap(zone, _rect(x, z, x + w, z + d), 0.0)
         ]
+        # Stair flights are open to the room; furniture placed over them would
+        # intersect the treads and block the only route between storeys.
+        self.stair_zones: List[Rect] = []
+        for stair in stairs:
+            if not (stair.get("walkable") or stair.get("render")):
+                continue
+            bbox = stair.get("bbox_m")
+            if not bbox or len(bbox) < 4:
+                continue
+            zone = _rect(
+                float(bbox[0]) - 0.3,
+                float(bbox[1]) - 0.3,
+                float(bbox[0]) + float(bbox[2]) + 0.3,
+                float(bbox[1]) + float(bbox[3]) + 0.3,
+            )
+            if _rect_overlap(zone, _rect(x, z, x + w, z + d), 0.0):
+                self.stair_zones.append(zone)
         self.items: List[Dict] = []
         self.reserved: List[Dict] = [
             {"rect": dict(zone), "reason": "doorway clearance"} for zone in self.door_zones
         ]
+        self.reserved.extend(
+            {"rect": dict(zone), "reason": "staircase clearance"}
+            for zone in self.stair_zones
+        )
         spawn = room.get("spawn_m")
         if spawn_room_id == self.room_id and spawn:
             rect = _rect(spawn[0] - 0.55, spawn[1] - 0.55, spawn[0] + 0.55, spawn[1] + 0.55)
@@ -1376,6 +1398,7 @@ def furnish_floor_plan(
     style: str = "modern",
     variant: int = 0,
     allow_partial: bool = False,
+    stairs: Sequence[Dict] = (),
 ) -> Dict:
     """Furnish every room deterministically from the parsed floor plan."""
     if style not in STYLES:
@@ -1400,6 +1423,7 @@ def furnish_floor_plan(
             spawn_room_id,
             style,
             windows,
+            stairs,
         )
         planner = PLANNERS.get(room_type, _plan_unknown)
         planner(layout)
