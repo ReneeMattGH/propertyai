@@ -18,6 +18,8 @@ import {
 } from '@/lib/reconstruction'
 
 const MAX_FLOOR_PLAN_BYTES = 15 * 1024 * 1024
+const MAX_FLOOR_PLANS = 5
+const FLOOR_LABELS = ['Ground floor', 'First floor', 'Second floor', 'Third floor', 'Fourth floor']
 const TERMINAL = new Set(['completed', 'failed', 'cancelled'])
 
 const STYLES = [
@@ -156,8 +158,7 @@ async function errorMessage(response: Response): Promise<string> {
 
 export default function CreateTourPage() {
   const [projectName, setProjectName] = useState('')
-  const [floorPlan, setFloorPlan] = useState<File | null>(null)
-  const [numFloors, setNumFloors] = useState(1)
+  const [floorPlans, setFloorPlans] = useState<File[]>([])
   const [knownWidth, setKnownWidth] = useState('')
   const [knownLength, setKnownLength] = useState('')
   const [style, setStyle] = useState('modern')
@@ -194,17 +195,18 @@ export default function CreateTourPage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!floorPlan || !floorPlan.type.startsWith('image/')) {
+    const firstImage = floorPlans.find((file) => file.type.startsWith('image/'))
+    if (!firstImage) {
       const frame = requestAnimationFrame(() => setPreviewUrl(null))
       return () => cancelAnimationFrame(frame)
     }
-    const url = URL.createObjectURL(floorPlan)
+    const url = URL.createObjectURL(firstImage)
     const frame = requestAnimationFrame(() => setPreviewUrl(url))
     return () => {
       cancelAnimationFrame(frame)
       URL.revokeObjectURL(url)
     }
-  }, [floorPlan])
+  }, [floorPlans])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -305,35 +307,48 @@ export default function CreateTourPage() {
   const validateFloorPlan = (file: File): string | null => {
     const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'application/pdf']
     if (!validTypes.includes(file.type)) {
-      return 'Floor plan must be a PNG, JPG, JPEG or PDF file.'
+      return `${file.name} must be a PNG, JPG, JPEG or PDF file.`
     }
     if (file.size > MAX_FLOOR_PLAN_BYTES) {
-      return `Floor plan is too large (${formatBytes(file.size)}). Maximum 15 MB.`
+      return `${file.name} is too large (${formatBytes(file.size)}). Maximum 15 MB per floor.`
     }
     if (file.size === 0) {
-      return 'That file is empty. Choose a readable floor plan image.'
+      return `${file.name} is empty. Choose a readable floor plan image.`
     }
     return null
   }
 
-  const applyFloorPlan = (file: File | null) => {
+  const addFloorPlans = (files: File[]) => {
     setError(null)
-    if (!file) return
-    const problem = validateFloorPlan(file)
-    if (problem) {
-      setError(problem)
+    if (files.length === 0) return
+    const problems = files.map(validateFloorPlan).filter(Boolean) as string[]
+    const valid = files.filter((file) => !validateFloorPlan(file))
+    if (problems.length > 0) {
+      setError(problems[0])
+    }
+    if (valid.length === 0) {
       if (fileInputRef.current) fileInputRef.current.value = ''
       return
     }
-    setFloorPlan(file)
+    if (floorPlans.length + valid.length > MAX_FLOOR_PLANS) {
+      setError(`At most ${MAX_FLOOR_PLANS} floor plans can be reconstructed at once.`)
+    }
+    setFloorPlans((previous) => [...previous, ...valid].slice(0, MAX_FLOOR_PLANS))
+    if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   const handleFloorPlanUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    applyFloorPlan(event.target.files?.[0] ?? null)
+    addFloorPlans(Array.from(event.target.files ?? []))
   }
 
-  const clearFloorPlan = () => {
-    setFloorPlan(null)
+  const removeFloorPlan = (index: number) => {
+    setFloorPlans((previous) => previous.filter((_, position) => position !== index))
+    setError(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const clearFloorPlans = () => {
+    setFloorPlans([])
     setError(null)
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
@@ -341,7 +356,7 @@ export default function CreateTourPage() {
   const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault()
     setDragging(false)
-    applyFloorPlan(event.dataTransfer.files?.[0] ?? null)
+    addFloorPlans(Array.from(event.dataTransfer.files ?? []))
   }
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -351,8 +366,8 @@ export default function CreateTourPage() {
       setError('Enter a project name.')
       return
     }
-    if (!floorPlan) {
-      setError('Upload a floor plan image.')
+    if (floorPlans.length === 0) {
+      setError('Upload at least one floor plan.')
       return
     }
 
@@ -367,8 +382,8 @@ export default function CreateTourPage() {
     try {
       const formData = new FormData()
       formData.append('project_name', projectName.trim())
-      formData.append('floor_plan', floorPlan)
-      formData.append('num_floors', String(numFloors))
+      floorPlans.forEach((file) => formData.append('floor_plans', file))
+      formData.append('num_floors', String(floorPlans.length))
       formData.append('style', style)
       if (knownWidth) formData.append('known_width', knownWidth)
       if (knownLength) formData.append('known_length', knownLength)
@@ -595,11 +610,12 @@ export default function CreateTourPage() {
               </div>
 
               <div>
-                <span className="label">Floor plan *</span>
+                <span className="label">Floor plans *</span>
                 <input
                   ref={fileInputRef}
                   id="floor-plan"
                   type="file"
+                  multiple
                   accept={engine?.pdf ? '.png,.jpg,.jpeg,.pdf' : '.png,.jpg,.jpeg'}
                   onChange={handleFloorPlanUpload}
                   className="sr-only"
@@ -622,7 +638,7 @@ export default function CreateTourPage() {
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={previewUrl}
-                        alt={`Uploaded floor plan preview: ${floorPlan?.name ?? 'floor plan'}`}
+                        alt={`Floor plan preview: ${floorPlans[0]?.name ?? 'floor plan'}`}
                         className="mx-auto max-h-64 w-full object-contain p-4"
                       />
                     </div>
@@ -640,65 +656,80 @@ export default function CreateTourPage() {
                         </svg>
                       </span>
                       <p className="mt-3 text-sm font-medium text-ink">
-                        {dragging ? 'Release to attach the plan' : 'Drop a floor plan here'}
+                        {dragging
+                          ? 'Release to attach the plan'
+                          : floorPlans.length > 0
+                            ? 'Add another floor'
+                            : 'Drop a floor plan here'}
                       </p>
                       <p className="mt-1 text-xs text-stone">
-                        PNG, JPG{engine?.pdf ? ', PDF' : ''} · up to 15 MB
+                        PNG, JPG{engine?.pdf ? ', PDF' : ''} · up to 15 MB per floor · one plan
+                        per storey or a multi-page PDF
                         {engine && !engine.pdf ? ' · PDF needs poppler in the engine' : ''}
                       </p>
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        className="btn btn-secondary btn-sm mt-4"
-                      >
-                        Choose file
-                      </button>
                     </div>
                   )}
-                  {floorPlan && (
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line bg-surface px-4 py-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-ink">{floorPlan.name}</p>
-                        <p className="text-[11px] text-stone">
-                          {formatBytes(floorPlan.size)} ·{' '}
-                          {floorPlan.type.replace('application/', '').replace('image/', '').toUpperCase()}
-                        </p>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => fileInputRef.current?.click()}
-                          className="btn btn-secondary btn-sm"
+                  {floorPlans.length > 0 && (
+                    <ul className="divide-y divide-line border-t border-line bg-surface">
+                      {floorPlans.map((file, index) => (
+                        <li
+                          key={`${file.name}-${file.size}-${index}`}
+                          className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
                         >
-                          Replace
-                        </button>
-                        <button type="button" onClick={clearFloorPlan} className="btn btn-ghost btn-sm">
-                          Remove
-                        </button>
-                      </div>
-                    </div>
+                          <div className="flex min-w-0 items-center gap-3">
+                            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-line bg-parchment text-[11px] font-semibold text-stone">
+                              {index + 1}
+                            </span>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium text-ink">
+                                <span className="text-stone">
+                                  {FLOOR_LABELS[index] ?? `Floor ${index + 1}`}:
+                                </span>{' '}
+                                {file.name}
+                              </p>
+                              <p className="text-[11px] text-stone">
+                                {formatBytes(file.size)} ·{' '}
+                                {file.type
+                                  .replace('application/', '')
+                                  .replace('image/', '')
+                                  .toUpperCase()}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => removeFloorPlan(index)}
+                            className="btn btn-ghost btn-sm"
+                          >
+                            Remove
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
                   )}
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line bg-surface px-4 py-3">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="btn btn-secondary btn-sm"
+                    >
+                      {floorPlans.length > 0 ? 'Add floor plan' : 'Choose files'}
+                    </button>
+                    {floorPlans.length > 0 && (
+                      <button type="button" onClick={clearFloorPlans} className="btn btn-ghost btn-sm">
+                        Clear all
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <p className="mt-2 text-[11px] leading-5 text-stone-light">
-                  The plan is the only geometry source and is preserved unchanged for this job.
+                  Each plan is preserved unchanged and becomes one storey of the walkthrough.
+                  Upload the ground floor first, then each upper floor in order. Multi-page PDFs
+                  are split page by page.
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <div>
-                  <label htmlFor="floors" className="label">
-                    Floors
-                  </label>
-                  <input
-                    id="floors"
-                    type="number"
-                    min={1}
-                    max={5}
-                    value={numFloors}
-                    onChange={(event) => setNumFloors(parseInt(event.target.value) || 1)}
-                    className="field"
-                  />
-                </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <div>
                   <label htmlFor="known-width" className="label">
                     Width (m)
@@ -733,8 +764,9 @@ export default function CreateTourPage() {
                 </div>
               </div>
               <p className="-mt-2 text-[11px] leading-5 text-stone-light">
-                Only the ground floor is reconstructed. Supplying both dimensions makes the scale
-                measured rather than estimated.
+                Floors are taken from the plans you uploaded
+                {floorPlans.length > 0 ? ` (${floorPlans.length})` : ''}. Supplying both dimensions
+                makes the scale measured rather than estimated.
               </p>
 
               <div>

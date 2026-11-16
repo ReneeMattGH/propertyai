@@ -8,9 +8,12 @@ import {
   downloadSceneAsset,
   fetchJob,
   fetchScene,
+  type CollisionData,
   type FurnitureItem,
   type ReconstructionJob,
+  type RoomGraph,
   type SceneBundle,
+  type SceneFloor,
 } from '@/lib/reconstruction'
 import {
   PITCH_LIMIT,
@@ -75,6 +78,24 @@ interface RenderStats {
   lighting: LightingPreset
 }
 
+interface FloorScene {
+  index: number
+  label: string
+  yOffset: number
+  model: THREE.Group
+  collision: CollisionData
+  roomGraph: RoomGraph
+  furniture: FurnitureItem[]
+  spawn: { x: number; z: number; yaw: number }
+}
+
+interface FloorState extends FloorScene {
+  wallCollision: WallBox[]
+  furnitureCollision: WallBox[]
+  roomAreas: RoomArea[]
+  footprint?: Footprint
+}
+
 interface Runtime {
   renderer: THREE.WebGLRenderer
   scene: THREE.Scene
@@ -97,6 +118,9 @@ interface Runtime {
   currentRoomId: number | null
   lightingPreset: LightingPreset
   frame: number
+  floors: { index: number; label: string; yOffset: number }[]
+  activeFloor: number
+  switchFloor: (index: number) => boolean
   setFurnitureVisible: (visible: boolean) => void
   setLightingPreset: (preset: LightingPreset) => void
   setQuality: (quality: Quality) => void
@@ -277,6 +301,65 @@ function assertUsableTextures(model: THREE.Group): void {
   }
 }
 
+function parseSceneModel(buffer: ArrayBuffer, label: string): Promise<THREE.Group> {
+  return new Promise<THREE.Group>((resolve, reject) => {
+    new GLTFLoader().parse(
+      buffer,
+      '',
+      (result) => resolve((result as unknown as { scene: THREE.Group }).scene),
+      (parseError) =>
+        reject(
+          new Error(
+            `The generated GLB${label ? ` for ${label}` : ''} could not be loaded: ${
+              parseError instanceof Error ? parseError.message : String(parseError)
+            }`,
+          ),
+        ),
+    )
+  })
+}
+
+function floorSceneFromBundle(
+  bundle: SceneBundle,
+  floor: SceneFloor,
+  model: THREE.Group,
+): FloorScene {
+  // The merged root collision/room graph keeps each floor's local coordinates
+  // and tags every entry with its floor, so filtering produces a self-consistent
+  // per-floor scene with the already-offset global room ids.
+  const multiFloor = (bundle.floors?.length ?? 0) > 1
+  const onFloor = <T extends { floor?: number }>(items: T[]): T[] =>
+    items.filter(
+      (item) => !multiFloor || item.floor === undefined || item.floor === floor.index,
+    )
+  const spawn = floor.collision?.spawn ?? bundle.collision.spawn
+  const footprint = floor.collision?.footprint ?? bundle.collision.footprint
+  return {
+    index: floor.index,
+    label: floor.label || `Floor ${floor.index + 1}`,
+    yOffset: floor.y_offset ?? floor.index * (bundle.floor_height ?? 3),
+    model,
+    collision: {
+      ...bundle.collision,
+      walls: onFloor(bundle.collision.walls),
+      doors: onFloor(bundle.collision.doors),
+      rooms: onFloor(bundle.collision.rooms),
+      furniture: onFloor(bundle.collision.furniture ?? []),
+      spawn,
+      footprint,
+      wall_height: floor.collision?.wall_height ?? bundle.collision.wall_height,
+      door_height: floor.collision?.door_height ?? bundle.collision.door_height,
+    },
+    roomGraph: {
+      ...bundle.room_graph,
+      nodes: onFloor(bundle.room_graph.nodes),
+      edges: onFloor(bundle.room_graph.edges),
+    },
+    furniture: onFloor(bundle.furniture ?? []),
+    spawn: { x: spawn.position[0], z: spawn.position[2], yaw: spawn.yaw },
+  }
+}
+
 function longestSightYaw(
   x: number,
   z: number,
@@ -439,6 +522,7 @@ export default function GameEngine({ jobId }: GameEngineProps) {
   const [fps, setFps] = useState<number | null>(null)
   const [renderStats, setRenderStats] = useState<RenderStats | null>(null)
   const [currentRoomId, setCurrentRoomId] = useState<number | null>(null)
+  const [activeFloor, setActiveFloor] = useState(0)
 
   const initialQualityApplied = useRef(false)
   useEffect(() => {
@@ -479,6 +563,7 @@ export default function GameEngine({ jobId }: GameEngineProps) {
         setProgress(3)
         setError(null)
         setCurrentRoomId(null)
+        setActiveFloor(0)
         setStatusText('Verifying the reconstruction job')
 
         const [fetchedJob, scene] = await Promise.all([
@@ -527,48 +612,92 @@ export default function GameEngine({ jobId }: GameEngineProps) {
 
         setPhase('downloading')
         setProgress(10)
-        setStatusText('Downloading the generated 3D model')
-        const modelBuffer = await downloadSceneAsset(
-          scene.model_url,
-          (loaded, total) => {
-            if (cancelled) return
-            if (total) {
-              setProgress(10 + Math.min(60, (loaded / total) * 60))
-            } else {
-              setProgress((current) => Math.min(68, current + 1))
-            }
-          },
-          controller.signal,
+        const sceneFloors = (scene.floors ?? []).filter(
+          (floor) => floor.model_url && floor.collision && floor.room_graph,
         )
-        if (cancelled) return
+        const multiFloor = sceneFloors.length > 1
+        const floorScenes: FloorScene[] = []
+        if (multiFloor) {
+          for (let position = 0; position < sceneFloors.length; position += 1) {
+            if (cancelled) return
+            const floor = sceneFloors[position]
+            const label = floor.label || `Floor ${position + 1}`
+            setStatusText(
+              `Downloading ${label} (${position + 1} of ${sceneFloors.length})`,
+            )
+            const base = 10 + (position / sceneFloors.length) * 58
+            const span = 58 / sceneFloors.length
+            const buffer = await downloadSceneAsset(
+              floor.model_url,
+              (loaded, total) => {
+                if (cancelled) return
+                if (total) {
+                  setProgress(base + Math.min(span, (loaded / total) * span))
+                } else {
+                  setProgress((current) => Math.min(base + span, current + 1))
+                }
+              },
+              controller.signal,
+            )
+            if (cancelled) return
+            const model = await parseSceneModel(buffer, label)
+            if (cancelled) return
+            assertUsableTextures(model)
+            floorScenes.push(floorSceneFromBundle(scene, floor, model))
+          }
+        } else {
+          setStatusText('Downloading the generated 3D model')
+          const modelBuffer = await downloadSceneAsset(
+            scene.model_url,
+            (loaded, total) => {
+              if (cancelled) return
+              if (total) {
+                setProgress(10 + Math.min(60, (loaded / total) * 60))
+              } else {
+                setProgress((current) => Math.min(68, current + 1))
+              }
+            },
+            controller.signal,
+          )
+          if (cancelled) return
+          const model = await parseSceneModel(modelBuffer, '')
+          if (cancelled) return
+          assertUsableTextures(model)
+          const singleFloor = sceneFloors[0]
+          floorScenes.push(
+            singleFloor
+              ? floorSceneFromBundle(scene, singleFloor, model)
+              : {
+                  index: 0,
+                  label: 'Ground floor',
+                  yOffset: 0,
+                  model,
+                  collision: scene.collision,
+                  roomGraph: scene.room_graph,
+                  furniture: scene.furniture ?? [],
+                  spawn: {
+                    x: scene.collision.spawn.position[0],
+                    z: scene.collision.spawn.position[2],
+                    yaw: scene.collision.spawn.yaw,
+                  },
+                },
+          )
+        }
 
         setPhase('building')
         setProgress(78)
-        setStatusText('Preparing materials, lighting and collision')
-        const gltf = await new Promise<{ scene: THREE.Group }>((resolve, reject) => {
-          new GLTFLoader().parse(
-            modelBuffer,
-            '',
-            (result) => resolve(result as unknown as { scene: THREE.Group }),
-            (parseError) =>
-              reject(
-                new Error(
-                  `The generated GLB could not be loaded: ${
-                    parseError instanceof Error ? parseError.message : String(parseError)
-                  }`,
-                ),
-              ),
-          )
-        })
-        if (cancelled) return
-        assertUsableTextures(gltf.scene)
-
+        setStatusText(
+          multiFloor
+            ? `Preparing ${floorScenes.length} floors: materials, lighting and collision`
+            : 'Preparing materials, lighting and collision',
+        )
         setProgress(88)
         setStatusText('Composing the first view')
-        runtime = await buildRuntime(container, gltf.scene, scene, cleanups, {
+        runtime = await buildRuntime(container, floorScenes, scene, cleanups, {
           onLockChange: setPointerLocked,
           onFps: setFps,
           onRoomChange: setCurrentRoomId,
+          onFloorChange: setActiveFloor,
           joystick: joystickRef,
           quality,
           lighting,
@@ -657,6 +786,10 @@ export default function GameEngine({ jobId }: GameEngineProps) {
 
   const meta = sceneBundle?.manifest
   const roomNodes = sceneBundle?.room_graph?.nodes ?? []
+  const floorList = sceneBundle?.floors ?? []
+  const multiFloor = floorList.length > 1
+  const activeFloorLabel =
+    floorList.find((floor) => floor.index === activeFloor)?.label ?? null
   const rooms = roomNodes.length
   const currentRoom = roomNodes.find((node) => node.id === currentRoomId) ?? null
   const currentFurniture = currentRoom?.furniture ?? []
@@ -777,6 +910,7 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                 {job?.project_name || 'Property walkthrough'}
               </h2>
               <p className="mt-0.5 text-[10.5px] leading-4 text-ivory/55">
+                {multiFloor ? `${floorList.length} floors · ` : ''}
                 {rooms} room{rooms === 1 ? '' : 's'} · {furnitureCount} furniture · {doors} doorway
                 {doors === 1 ? '' : 's'}
                 {approximate ? ' · estimated scale' : ' · measured scale'}
@@ -799,6 +933,9 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                 </p>
                 {currentRoom ? (
                   <p className="mt-0.5 text-[10px] text-ivory/55 first-letter:uppercase sm:text-[10.5px]">
+                    {multiFloor && currentRoom.floor_label
+                      ? `${currentRoom.floor_label} · `
+                      : ''}
                     {`${
                       currentRoom.room_type
                         ? currentRoom.room_type.replace(/_/g, ' ')
@@ -849,7 +986,14 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                               : 'flex items-center justify-between gap-2 rounded-full border border-white/8 px-3 py-1.5 text-left text-[11px] text-ivory/55 transition hover:bg-white/[0.06] hover:text-ivory/85 motion-reduce:transition-none'
                           }
                         >
-                          <span className="truncate">{node.name || `Room ${node.id + 1}`}</span>
+                          <span className="truncate">
+                            {multiFloor && node.floor_label ? (
+                              <span className="mr-1 text-[8px] uppercase tracking-[0.08em] text-ivory/35">
+                                {node.floor_label}
+                              </span>
+                            ) : null}
+                            {node.name || `Room ${node.id + 1}`}
+                          </span>
                           {node.area_m2 != null && (
                             <span className="shrink-0 text-[9px] tabular-nums text-ivory/35">
                               {Number(node.area_m2).toFixed(0)} m²
@@ -884,6 +1028,41 @@ export default function GameEngine({ jobId }: GameEngineProps) {
               </div>
             </div>
           </div>
+
+          {multiFloor && (
+            <div
+              className="mt-1.5 flex flex-wrap items-center gap-1.5 border-t border-white/10 pt-1.5"
+              data-testid="floor-switcher"
+              role="group"
+              aria-label="Floors"
+            >
+              <span className="text-[9px] font-semibold uppercase tracking-[0.2em] text-ivory/35">
+                Floor
+              </span>
+              {floorList.map((floor) => {
+                const active = activeFloor === floor.index
+                return (
+                  <button
+                    key={floor.index}
+                    onClick={() => runtimeRef.current?.switchFloor(floor.index)}
+                    aria-pressed={active}
+                    className={
+                      active
+                        ? 'rounded-full bg-white/12 px-2.5 py-1 text-[10.5px] font-medium text-ivory'
+                        : 'rounded-full border border-white/10 px-2.5 py-1 text-[10.5px] text-ivory/55 transition hover:bg-white/[0.06] hover:text-ivory/85 motion-reduce:transition-none'
+                    }
+                  >
+                    {floor.label}
+                  </button>
+                )
+              })}
+              {activeFloorLabel && (
+                <span className="text-[10px] text-ivory/35">
+                  · walking {activeFloorLabel.toLowerCase()}
+                </span>
+              )}
+            </div>
+          )}
 
           <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-white/10 pt-1.5">
             <p className="text-[10px] text-ivory/45">
@@ -924,6 +1103,12 @@ export default function GameEngine({ jobId }: GameEngineProps) {
               <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
                 <dt className="text-ivory/35">Rooms</dt>
                 <dd>{rooms}</dd>
+                {multiFloor && (
+                  <>
+                    <dt className="text-ivory/35">Floors</dt>
+                    <dd>{floorList.length}</dd>
+                  </>
+                )}
                 <dt className="text-ivory/35">Furniture</dt>
                 <dd>{furnitureCount} items</dd>
                 <dt className="text-ivory/35">Doorways</dt>
@@ -1001,6 +1186,9 @@ export default function GameEngine({ jobId }: GameEngineProps) {
                               : 'truncate rounded-[7px] border border-white/8 px-2 py-1.5 text-left text-[10.5px] text-ivory/65'
                           }
                         >
+                          {multiFloor && node.floor_label
+                            ? `${node.floor_label}: `
+                            : ''}
                           {node.name || `Room ${node.id + 1}`}
                         </button>
                       )
@@ -1206,6 +1394,7 @@ interface BuildOptions {
   onLockChange: (locked: boolean) => void
   onFps: (fps: number) => void
   onRoomChange: (roomId: number | null) => void
+  onFloorChange: (floorIndex: number) => void
   joystick: React.MutableRefObject<{ x: number; z: number; active: boolean }>
   quality: Quality
   lighting: LightingPreset
@@ -1215,12 +1404,15 @@ interface BuildOptions {
 
 async function buildRuntime(
   container: HTMLDivElement,
-  model: THREE.Group,
+  floorScenes: FloorScene[],
   bundle: SceneBundle,
   cleanups: (() => void)[],
   options: BuildOptions,
 ): Promise<Runtime> {
   const { collision } = bundle
+  if (floorScenes.length === 0) {
+    throw new Error('The walkthrough has no floor geometry to display.')
+  }
   let renderer: THREE.WebGLRenderer
   try {
     renderer = new THREE.WebGLRenderer({
@@ -1253,12 +1445,16 @@ async function buildRuntime(
   )
   camera.rotation.order = 'YXZ'
 
-  model.updateMatrixWorld(true)
-  const bounds = new THREE.Box3().setFromObject(model)
+  const world = new THREE.Group()
+  for (const floor of floorScenes) {
+    floor.model.position.y = floor.yOffset
+    world.add(floor.model)
+  }
+  world.updateMatrixWorld(true)
+  const bounds = new THREE.Box3().setFromObject(world)
   const size = bounds.getSize(new THREE.Vector3())
   const center = bounds.getCenter(new THREE.Vector3())
   const wallHeight = collision.wall_height || 2.8
-  const footprint = collision.footprint
 
   const pmrem = new THREE.PMREMGenerator(renderer)
   const roomEnvironment = new RoomEnvironment()
@@ -1351,34 +1547,40 @@ async function buildRuntime(
   scene.add(fill.target)
 
   const lamps: THREE.SpotLight[] = []
-  for (const room of collision.rooms) {
-    // Wide downlights: a point light a few centimetres below the ceiling
-    // produced a blown-out white pool on the plaster. A downward spot keeps
-    // the ceiling clean while lighting the floor and furniture below.
-    const lamp = new THREE.SpotLight(
-      0xffffff,
-      12,
-      Math.max(9, wallHeight * 3.6),
-      Math.PI / 2.7,
-      0.85,
-      2,
-    )
-    lamp.position.set(room.center[0], Math.max(2.1, wallHeight - 0.12), room.center[1])
-    lamp.target.position.set(room.center[0], 0, room.center[1])
-    scene.add(lamp)
-    scene.add(lamp.target)
-    lamps.push(lamp)
+  for (const floor of floorScenes) {
+    for (const room of floor.collision.rooms) {
+      // Wide downlights: a point light a few centimetres below the ceiling
+      // produced a blown-out white pool on the plaster. A downward spot keeps
+      // the ceiling clean while lighting the floor and furniture below.
+      const lamp = new THREE.SpotLight(
+        0xffffff,
+        12,
+        Math.max(9, wallHeight * 3.6),
+        Math.PI / 2.7,
+        0.85,
+        2,
+      )
+      lamp.position.set(
+        room.center[0],
+        floor.yOffset + Math.max(2.1, wallHeight - 0.12),
+        room.center[1],
+      )
+      lamp.target.position.set(room.center[0], floor.yOffset, room.center[1])
+      scene.add(lamp)
+      scene.add(lamp.target)
+      lamps.push(lamp)
+    }
   }
 
   const maxAnisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy())
-  const ceilings = findCeilingRoots(model)
+  const ceilings = findCeilingRoots(world)
   const ceilingMeshes = new Set<THREE.Object3D>()
   for (const root of ceilings) {
     root.traverse((object) => {
       if ((object as THREE.Mesh).isMesh) ceilingMeshes.add(object)
     })
   }
-  model.traverse((object) => {
+  world.traverse((object) => {
     const mesh = object as THREE.Mesh
     if (!mesh.isMesh) return
     const isCeiling = ceilingMeshes.has(object)
@@ -1405,20 +1607,30 @@ async function buildRuntime(
       material.needsUpdate = true
     }
   })
-  scene.add(model)
+  scene.add(world)
 
-  const wallCollision: WallBox[] = collision.walls
-  const furnitureCollision: WallBox[] = (collision.furniture ?? []).map((item) => ({
-    min: item.min,
-    max: item.max,
-  }))
-  const furnitureRoots = findFurnitureRoots(model)
-  const roomAreas: RoomArea[] = (bundle.room_graph?.nodes ?? []).map((node) => ({
-    id: node.id,
-    center: node.center,
-    bounds: node.bounds,
-    polygon: node.polygon,
-  }))
+  const floorStates: FloorState[] = floorScenes.map((floor) => {
+    const wallCollision: WallBox[] = floor.collision.walls
+    const furnitureCollision: WallBox[] = (floor.collision.furniture ?? []).map((item) => ({
+      min: item.min,
+      max: item.max,
+    }))
+    const roomAreas: RoomArea[] = (floor.roomGraph.nodes ?? []).map((node) => ({
+      id: node.id,
+      center: node.center,
+      bounds: node.bounds,
+      polygon: node.polygon,
+    }))
+    return {
+      ...floor,
+      wallCollision,
+      furnitureCollision,
+      roomAreas,
+      footprint: floor.collision.footprint,
+    }
+  })
+  let activeFloor = floorStates[0]
+  const furnitureRoots = findFurnitureRoots(world)
 
   const shadowTexture = contactShadowTexture()
   const shadowGeometry = new THREE.PlaneGeometry(1, 1)
@@ -1433,7 +1645,7 @@ async function buildRuntime(
     polygonOffsetFactor: -1,
     toneMapped: false,
   })
-  const contactItems: { x: number; z: number; sx: number; sz: number }[] = []
+  const contactItems: { x: number; y: number; z: number; sx: number; sz: number }[] = []
   for (const root of furnitureRoots) {
     const box = new THREE.Box3().setFromObject(root)
     if (box.isEmpty()) continue
@@ -1441,6 +1653,7 @@ async function buildRuntime(
     if (itemSize.x < 0.18 || itemSize.z < 0.18) continue
     contactItems.push({
       x: (box.min.x + box.max.x) / 2,
+      y: box.min.y + 0.014,
       z: (box.min.z + box.max.z) / 2,
       sx: itemSize.x * 0.94,
       sz: itemSize.z * 0.94,
@@ -1454,7 +1667,7 @@ async function buildRuntime(
     const scale = new THREE.Vector3()
     const position = new THREE.Vector3()
     contactItems.forEach((item, index) => {
-      position.set(item.x, 0.014, item.z)
+      position.set(item.x, item.y, item.z)
       scale.set(item.sx, 1, item.sz)
       matrix.compose(position, quaternion, scale)
       contactShadows?.setMatrixAt(index, matrix)
@@ -1465,30 +1678,36 @@ async function buildRuntime(
     scene.add(contactShadows)
   }
 
-  const rawSpawn = {
-    x: collision.spawn.position[0],
-    z: collision.spawn.position[2],
-  }
-  const safeSpawn = resolveSpawn(rawSpawn, wallCollision, footprint)
-  const spawnPosition = new THREE.Vector3(safeSpawn.x, EYE_HEIGHT, safeSpawn.z)
-  const spawnRoom = roomAtPoint(safeSpawn.x, safeSpawn.z, roomAreas)
+  const initialFloor = floorStates[0]
+  const rawSpawn = { x: initialFloor.spawn.x, z: initialFloor.spawn.z }
+  const safeSpawn = resolveSpawn(
+    rawSpawn,
+    initialFloor.wallCollision,
+    initialFloor.footprint,
+  )
+  const spawnPosition = new THREE.Vector3(
+    safeSpawn.x,
+    initialFloor.yOffset + EYE_HEIGHT,
+    safeSpawn.z,
+  )
+  const spawnRoom = roomAtPoint(safeSpawn.x, safeSpawn.z, initialFloor.roomAreas)
   const fallbackYaw =
     Math.abs(safeSpawn.x - rawSpawn.x) + Math.abs(safeSpawn.z - rawSpawn.z) > 0.05
       ? longestSightYaw(
           safeSpawn.x,
           safeSpawn.z,
           spawnRoom,
-          roomAreas,
-          wallCollision,
-          collision.spawn.yaw,
+          initialFloor.roomAreas,
+          initialFloor.wallCollision,
+          initialFloor.spawn.yaw,
         )
-      : collision.spawn.yaw
+      : initialFloor.spawn.yaw
   const focalView = primaryFurnitureView(
     safeSpawn.x,
     safeSpawn.z,
     spawnRoom,
-    bundle.furniture ?? [],
-    wallCollision,
+    initialFloor.furniture,
+    initialFloor.wallCollision,
   )
   // The spawn keeps the room's long view; turning the full 90 degrees towards
   // the sofa fills the frame with upholstery and hides the floor plan's depth.
@@ -1502,6 +1721,7 @@ async function buildRuntime(
     velocityY: 0,
     jumpQueued: false,
     currentRoomId: null as number | null,
+    floorIndex: 0,
     lightingPreset: options.lighting,
   }
 
@@ -1555,7 +1775,7 @@ async function buildRuntime(
       sun.shadow.map = null
       renderer.shadowMap.needsUpdate = true
     }
-    model.traverse((object) => {
+    world.traverse((object) => {
       const mesh = object as THREE.Mesh
       if (!mesh.isMesh) return
       const isCeiling = ceilingMeshes.has(object)
@@ -1569,21 +1789,46 @@ async function buildRuntime(
     renderer.shadowMap.needsUpdate = true
   }
 
+  function activateFloor(index: number): FloorState | null {
+    const floor = floorStates.find((entry) => entry.index === index)
+    if (!floor) return null
+    const changed = activeFloor.index !== floor.index
+    activeFloor = floor
+    state.floorIndex = floorStates.indexOf(floor)
+    runtime.wallCollision = floor.wallCollision
+    runtime.furnitureCollision = floor.furnitureCollision
+    runtime.footprint = floor.footprint
+    runtime.walls =
+      runtime.furnitureVisible && !runtime.furnitureCollisionPending
+        ? [...floor.wallCollision, ...floor.furnitureCollision]
+        : floor.wallCollision
+    if (changed) options.onFloorChange(floor.index)
+    return floor
+  }
+
   const teleportToRoom = (roomId: number): boolean => {
-    const room = roomAreas.find((entry) => entry.id === roomId)
+    const targetFloor = floorStates.find((entry) =>
+      entry.roomAreas.some((room) => room.id === roomId),
+    )
+    if (!targetFloor) return false
+    const floor = activateFloor(targetFloor.index)
+    if (!floor) return false
+    const room = floor.roomAreas.find((entry) => entry.id === roomId)
     if (!room) return false
     const [cx, cz] = room.center
     const inRoom = (x: number, z: number) =>
-      roomAtPoint(x, z, roomAreas) === roomId || !room.polygon || room.polygon.length < 3
+      roomAtPoint(x, z, floor.roomAreas) === roomId ||
+      !room.polygon ||
+      room.polygon.length < 3
     const free = (x: number, z: number) =>
       !isBlocked(x, z, PLAYER_RADIUS, runtime.walls) &&
       inRoom(x, z) &&
-      (!footprint ||
+      (!floor.footprint ||
         (x >= PLAYER_RADIUS &&
           z >= PLAYER_RADIUS &&
-          x <= footprint.width - PLAYER_RADIUS &&
-          z <= footprint.height - PLAYER_RADIUS))
-    const items = bundle.furniture ?? []
+          x <= floor.footprint.width - PLAYER_RADIUS &&
+          z <= floor.footprint.height - PLAYER_RADIUS))
+    const items = floor.furniture
     const focalTarget = primaryFurnitureTarget(roomId, items)
     let target: Point2 | null = null
     let view: FocalView | null = null
@@ -1609,7 +1854,7 @@ async function buildRuntime(
               focalTarget.position[2] - z,
             )
             if (distance < 1.5) continue
-            const candidate = viewToward(x, z, focalTarget, runtime.wallCollision)
+            const candidate = viewToward(x, z, focalTarget, floor.wallCollision)
             if (!candidate) continue
             const score =
               -Math.abs(distance - 2.9) * 1.2 - Math.hypot(x - cx, z - cz) * 0.12
@@ -1638,22 +1883,46 @@ async function buildRuntime(
       }
     }
     if (!target) return false
-    state.position.set(target.x, EYE_HEIGHT, target.z)
+    state.position.set(target.x, floor.yOffset + EYE_HEIGHT, target.z)
     state.velocity.set(0, 0)
     state.velocityY = 0
     const fallback = longestSightYaw(
       target.x,
       target.z,
       roomId,
-      roomAreas,
-      runtime.wallCollision,
+      floor.roomAreas,
+      floor.wallCollision,
       state.yaw,
     )
     const focal =
       view ??
-      primaryFurnitureView(target.x, target.z, roomId, items, runtime.wallCollision)
+      primaryFurnitureView(target.x, target.z, roomId, items, floor.wallCollision)
     state.pitch = focal?.pitch ?? spawnPitch
     state.yaw = focal?.yaw ?? fallback
+    return true
+  }
+
+  const switchFloor = (index: number): boolean => {
+    const floor = floorStates.find((entry) => entry.index === index)
+    if (!floor) return false
+    activateFloor(floor.index)
+    const candidate = resolveSpawn(
+      { x: floor.spawn.x, z: floor.spawn.z },
+      floor.wallCollision,
+      floor.footprint,
+    )
+    if (
+      floor.roomAreas.length === 0 ||
+      isBlocked(candidate.x, candidate.z, PLAYER_RADIUS, floor.wallCollision)
+    ) {
+      const first = floor.roomAreas[0]
+      return first ? teleportToRoom(first.id) : false
+    }
+    state.position.set(candidate.x, floor.yOffset + EYE_HEIGHT, candidate.z)
+    state.velocity.set(0, 0)
+    state.velocityY = 0
+    state.pitch = spawnPitch
+    state.yaw = floor.spawn.yaw
     return true
   }
 
@@ -1698,13 +1967,22 @@ async function buildRuntime(
     set jumpQueued(value: boolean) {
       state.jumpQueued = value
     },
-    walls: [...wallCollision, ...furnitureCollision],
-    wallCollision,
-    furnitureCollision,
+    walls: [...initialFloor.wallCollision, ...initialFloor.furnitureCollision],
+    wallCollision: initialFloor.wallCollision,
+    furnitureCollision: initialFloor.furnitureCollision,
     furnitureVisible: true,
     furnitureCollisionPending: false,
-    footprint,
+    footprint: initialFloor.footprint,
     spawn: { position: spawnPosition.clone(), yaw: spawnYaw },
+    floors: floorStates.map((floor) => ({
+      index: floor.index,
+      label: floor.label,
+      yOffset: floor.yOffset,
+    })),
+    get activeFloor() {
+      return activeFloor.index
+    },
+    switchFloor,
     get currentRoomId() {
       return state.currentRoomId
     },
@@ -1752,6 +2030,8 @@ async function buildRuntime(
       lighting: state.lightingPreset,
     }),
     reset: () => {
+      runtime.furnitureCollisionPending = false
+      activateFloor(initialFloor.index)
       runtime.position.copy(runtime.spawn.position)
       runtime.yaw = runtime.spawn.yaw
       runtime.pitch = spawnPitch
@@ -2033,24 +2313,29 @@ async function buildRuntime(
       runtime.position.z = moved.z
     }
 
-    if (runtime.jumpQueued && runtime.position.y <= EYE_HEIGHT + 1e-4) {
+    const eyeLevel = activeFloor.yOffset + EYE_HEIGHT
+    if (runtime.jumpQueued && runtime.position.y <= eyeLevel + 1e-4) {
       runtime.velocityY = JUMP_SPEED
     }
     runtime.jumpQueued = false
     runtime.velocityY -= GRAVITY * delta
     runtime.position.y += runtime.velocityY * delta
-    const ceilingLimit = Math.max(EYE_HEIGHT, wallHeight - 0.12)
+    const ceilingLimit = Math.max(eyeLevel, activeFloor.yOffset + wallHeight - 0.12)
     if (runtime.position.y > ceilingLimit) {
       runtime.position.y = ceilingLimit
       runtime.velocityY = Math.min(0, runtime.velocityY)
     }
-    if (runtime.position.y <= EYE_HEIGHT) {
-      runtime.position.y = EYE_HEIGHT
+    if (runtime.position.y <= eyeLevel) {
+      runtime.position.y = eyeLevel
       runtime.velocityY = 0
     }
 
     applyCamera()
-    const detectedRoom = roomAtPoint(runtime.position.x, runtime.position.z, roomAreas)
+    const detectedRoom = roomAtPoint(
+      runtime.position.x,
+      runtime.position.z,
+      activeFloor.roomAreas,
+    )
     if (detectedRoom !== runtime.currentRoomId) {
       runtime.currentRoomId = detectedRoom
       options.onRoomChange(detectedRoom)

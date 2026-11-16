@@ -399,6 +399,7 @@ class GeometryBuilder:
         use_photo_floor_textures: bool = False,
         furnishing: Optional[Dict] = None,
         style: str = "modern",
+        output_dir: Optional[Path] = None,
     ) -> Dict:
         return await asyncio.to_thread(
             self._build_geometry_sync,
@@ -415,6 +416,7 @@ class GeometryBuilder:
             use_photo_floor_textures,
             furnishing,
             style,
+            output_dir,
         )
 
     def _build_geometry_sync(
@@ -432,6 +434,7 @@ class GeometryBuilder:
         use_photo_floor_textures: bool = False,
         furnishing: Optional[Dict] = None,
         style: str = "modern",
+        output_dir: Optional[Path] = None,
     ) -> Dict:
         def emit(stage: str):
             if progress_callback is None:
@@ -612,7 +615,9 @@ class GeometryBuilder:
         warnings.extend(photogrammetry.get("warnings", []))
         warnings.extend(self._photogrammetry_alignment_warnings(photogrammetry))
 
-        output_dir = Path(__file__).parent / "output" / job_id
+        output_dir = Path(output_dir) if output_dir is not None else (
+            Path(__file__).parent / "output" / job_id
+        )
         output_dir.mkdir(parents=True, exist_ok=True)
         glb_path = output_dir / "scene.glb"
         emit("exporting")

@@ -87,6 +87,7 @@ export default function RoomTypeReview({
   const [review, setReview] = useState<RoomTypeReview | null>(null)
   const [selections, setSelections] = useState<Record<number, Selection>>({})
   const [selectedRoomId, setSelectedRoomId] = useState<number | null>(null)
+  const [activeFloor, setActiveFloor] = useState(0)
   const [planSrc, setPlanSrc] = useState<string | null>(null)
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null)
   const [loading, setLoading] = useState(true)
@@ -117,8 +118,21 @@ export default function RoomTypeReview({
         )
         const initial = data.rooms.find((room) => room.needs_confirmation) ?? data.rooms[0]
         setSelectedRoomId(initial ? initial.room_id : null)
+        const multiFloor = (data.floors?.length ?? 0) > 1
+        const initialFloor = multiFloor
+          ? Math.max(
+              0,
+              (data.floors ?? []).findIndex(
+                (floor) => floor.index === Number(initial?.floor ?? 0),
+              ),
+            )
+          : 0
+        setActiveFloor(initialFloor)
+        const floorPreview = multiFloor
+          ? data.floors?.[initialFloor]?.preview_url
+          : null
         setPlanSrc(
-          assetUrl(data.normalized_floor_plan_url || data.floor_plan_url),
+          assetUrl(floorPreview || data.normalized_floor_plan_url || data.floor_plan_url),
         )
         setNaturalSize(null)
         setError(null)
@@ -151,13 +165,43 @@ export default function RoomTypeReview({
 
   const uncertainRooms = review?.rooms.filter((room) => room.needs_confirmation) ?? []
 
-  const planWidth = Number(review?.image_dimensions?.[0] ?? naturalSize?.width ?? 0)
-  const planHeight = Number(review?.image_dimensions?.[1] ?? naturalSize?.height ?? 0)
+  const floorGroups = useMemo(() => {
+    if (!review) return []
+    const floors = review.floors ?? []
+    if (floors.length > 1) return floors
+    return [
+      {
+        index: 0,
+        label: floors[0]?.label ?? 'Floor plan',
+        image_dimensions: review.image_dimensions ?? floors[0]?.image_dimensions ?? null,
+        preview_url: floors[0]?.preview_url ?? review.normalized_floor_plan_url,
+        room_ids: review.rooms.map((room) => room.room_id),
+      },
+    ]
+  }, [review])
+
+  const activeFloorMeta = floorGroups[activeFloor] ?? floorGroups[0]
+  const activeRoomIds = useMemo(
+    () => new Set(activeFloorMeta?.room_ids ?? []),
+    [activeFloorMeta],
+  )
+  const activeRooms = useMemo(() => {
+    if (!review) return []
+    if (floorGroups.length <= 1) return review.rooms
+    return review.rooms.filter((room) => activeRoomIds.has(room.room_id))
+  }, [review, floorGroups.length, activeRoomIds])
+
+  const planWidth = Number(
+    activeFloorMeta?.image_dimensions?.[0] ?? naturalSize?.width ?? 0,
+  )
+  const planHeight = Number(
+    activeFloorMeta?.image_dimensions?.[1] ?? naturalSize?.height ?? 0,
+  )
   const hasPlanDimensions = planWidth > 0 && planHeight > 0
 
   const roomShapes = useMemo(() => {
     if (!review) return []
-    return review.rooms.flatMap((room, index) => {
+    return activeRooms.flatMap((room, index) => {
       const points =
         room.polygon_px && room.polygon_px.length >= 3
           ? room.polygon_px
@@ -173,18 +217,36 @@ export default function RoomTypeReview({
         },
       ]
     })
-  }, [review])
+  }, [review, activeRooms])
 
   const selectedRoom = review?.rooms.find((room) => room.room_id === selectedRoomId) ?? null
   const selectedIndex = selectedRoom
-    ? review?.rooms.findIndex((room) => room.room_id === selectedRoom.room_id) ?? 0
+    ? Math.max(
+        0,
+        activeRooms.findIndex((room) => room.room_id === selectedRoom.room_id),
+      )
     : 0
   const selectedColor = ROOM_COLORS[selectedIndex % ROOM_COLORS.length]
   const selectedSelection = selectedRoom ? selections[selectedRoom.room_id] : undefined
 
+  const selectFloor = (position: number) => {
+    if (!review) return
+    const floor = floorGroups[position]
+    setActiveFloor(position)
+    setNaturalSize(null)
+    setPlanSrc(assetUrl(floor?.preview_url || review.normalized_floor_plan_url || review.floor_plan_url))
+    const ids = floor?.room_ids ? new Set(floor.room_ids) : null
+    const firstRoom = review.rooms.find((room) => (ids ? ids.has(room.room_id) : true))
+    if (firstRoom) setSelectedRoomId(firstRoom.room_id)
+  }
+
   const handleImageError = () => {
     if (!review) return
-    const fallback = assetUrl(review.floor_plan_url)
+    const fallback = assetUrl(
+      floorGroups.length > 1
+        ? floorGroups[activeFloor]?.preview_url || review.floor_plan_url
+        : review.normalized_floor_plan_url || review.floor_plan_url,
+    )
     if (planSrc !== fallback) setPlanSrc(fallback)
   }
 
@@ -254,7 +316,10 @@ export default function RoomTypeReview({
           </p>
         </div>
         <div className="text-right text-xs text-stone">
-          <p>{review.rooms.length} rooms detected</p>
+          <p>
+            {review.rooms.length} rooms detected
+            {floorGroups.length > 1 ? ` · ${floorGroups.length} floors` : ''}
+          </p>
           {review.footprint_m ? (
             <p className="mt-0.5 text-stone-light">
               Footprint {Number(review.footprint_m.width ?? 0).toFixed(1)} ×{' '}
@@ -274,6 +339,34 @@ export default function RoomTypeReview({
             : ''}
         </p>
       )}
+
+      {floorGroups.length > 1 ? (
+        <div
+          className="mt-4 flex flex-wrap gap-2"
+          role="tablist"
+          aria-label="Building floors"
+        >
+          {floorGroups.map((floor, position) => {
+            const isActive = position === activeFloor
+            const count = review.rooms.filter((room) =>
+              floor.room_ids ? floor.room_ids.includes(room.room_id) : true,
+            ).length
+            return (
+              <button
+                key={`floor-tab-${floor.index}`}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => selectFloor(position)}
+                className={`btn btn-sm ${isActive ? 'btn-primary' : 'btn-secondary'}`}
+              >
+                {floor.label}
+                <span className="ml-1.5 font-normal opacity-70">{count}</span>
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
 
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)]">
         <div className="lg:sticky lg:top-24 lg:self-start">
@@ -332,7 +425,7 @@ export default function RoomTypeReview({
                         role="button"
                         tabIndex={0}
                         focusable="true"
-                        aria-label={`Room ${room.room_id + 1}: ${description}`}
+                        aria-label={`Room ${index + 1}: ${description}`}
                         aria-pressed={isSelected}
                         data-testid={`room-plan-room-${room.room_id}`}
                         data-room-id={room.room_id}
@@ -385,7 +478,9 @@ export default function RoomTypeReview({
             <figcaption className="border-t border-line bg-surface px-3 py-2 text-[11px] text-stone">
               {roomShapes.length === 0
                 ? 'Room outlines were not published for this plan; use the list to assign types.'
-                : 'Click a numbered room on the plan to jump to its settings.'}
+                : floorGroups.length > 1
+                  ? `${activeFloorMeta?.label ?? 'Floor'} · click a numbered room to jump to its settings.`
+                  : 'Click a numbered room on the plan to jump to its settings.'}
             </figcaption>
           </figure>
 
@@ -420,7 +515,7 @@ export default function RoomTypeReview({
         </div>
 
         <ol className="space-y-2" aria-label="Detected rooms">
-          {review.rooms.map((room, index) => {
+          {activeRooms.map((room, index) => {
             const selection = selections[room.room_id] ?? {
               room_type: room.room_type,
               name: room.name ?? '',
@@ -469,7 +564,7 @@ export default function RoomTypeReview({
                       ) : null}
                     </p>
                     <p className="mt-0.5 text-xs text-stone">
-                      Room {room.room_id + 1} · {typeLabel(review, selection.room_type)}
+                      Room {index + 1} · {typeLabel(review, selection.room_type)}
                       {room.area_m2 != null ? ` · ${Number(room.area_m2).toFixed(1)} m²` : ''}
                       {size ? ` · ${size}` : ''}
                     </p>

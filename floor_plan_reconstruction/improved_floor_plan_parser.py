@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -40,6 +41,10 @@ DEFAULT_HOUSE_WIDTH_M = 12.0
 DEFAULT_ROOM_MIN_SIDE_M = 3.2
 MIN_DOOR_M = 0.45
 MAX_DOOR_M = 2.2
+# Gaps wider than a doorway are open passages, not walls. Sealing them turns
+# furniture outlines and dashed annotation into phantom room divisions.
+MAX_SEALED_GAP_M = 1.8
+MIN_SEAL_FLANK_RATIO = 0.02
 DOOR_ARC_THRESHOLD = 0.30
 MIN_USABLE_ROOM_AREA_M2 = 0.55
 MIN_USABLE_ROOM_SIDE_M = 0.45
@@ -63,26 +68,144 @@ def _load_rgb_image(path: Path) -> Image.Image:
         return im.convert("RGB")
 
 
-def _rasterize_pdf(path: Path, job_id: str) -> Path:
+def _rasterize_pdf(path: Path, job_id: str, page_index: int = 0, dpi: int = 150) -> Path:
+    target = path.parent / f"{path.stem}_page{page_index + 1}.png"
+    if target.exists():
+        return target
     try:
         from pdf2image import convert_from_path
+
+        pages = convert_from_path(
+            str(path), dpi=dpi, first_page=page_index + 1, last_page=page_index + 1
+        )
+        if pages:
+            pages[0].save(target)
+            return target
+    except Exception:
+        pass
+    try:
+        import pymupdf
+
+        with pymupdf.open(str(path)) as document:
+            if page_index >= document.page_count:
+                raise FloorPlanParseError("The PDF contains no pages")
+            pixmap = document[page_index].get_pixmap(dpi=dpi)
+            pixmap.save(str(target))
+            return target
+    except FloorPlanParseError:
+        raise
     except ImportError as exc:  # pragma: no cover - environment dependent
         raise FloorPlanParseError(
-            "PDF floor plans require the pdf2image package and the poppler utilities "
-            "(pdftoppm). Export the plan as PNG/JPG instead."
+            "PDF floor plans require PyMuPDF or pdf2image with poppler. "
+            "Export the plan as PNG/JPG instead."
         ) from exc
-    try:
-        pages = convert_from_path(str(path), dpi=200, first_page=1, last_page=1)
     except Exception as exc:
         raise FloorPlanParseError(
-            "Could not rasterise the PDF floor plan. Install poppler (pdftoppm) or "
-            f"upload a PNG/JPG. Details: {exc}"
+            f"Could not rasterise the PDF floor plan. Details: {exc}"
         ) from exc
-    if not pages:
-        raise FloorPlanParseError("The PDF contains no pages")
-    target = path.parent / f"{path.stem}_page1.png"
-    pages[0].save(target)
-    return target
+
+
+def pdf_page_count(path: Path) -> int:
+    try:
+        import pymupdf
+
+        with pymupdf.open(str(path)) as document:
+            return document.page_count
+    except Exception:
+        return 1
+
+
+_LABEL_RE = re.compile(
+    r"(?P<name>[A-Za-z][A-Za-z &.'/-]{1,40}?)\s*"
+    r"(?P<fw>\d+)\s*'\s*(?P<fi>\d+)?\s*[\"”]?\s*[Xx×]\s*"
+    r"(?P<hw>\d+)\s*'\s*(?P<hi>\d+)?\s*[\"”]?"
+)
+
+_DIM_ONLY_RE = re.compile(r"^\s*(?P<feet>\d+)\s*'\s*[-\s]?\s*(?P<inch>\d+)?\s*[\"”]?\s*$")
+
+
+def _feet_inches_to_m(feet: str, inches: Optional[str]) -> float:
+    return (float(feet) + float(inches or 0) / 12.0) * 0.3048
+
+
+def extract_pdf_plan_labels(path: Path, page_index: int = 0) -> Dict:
+    """Read room labels with printed dimensions from a vector PDF plan.
+
+    CAD floor plans keep their labels in the text layer, e.g.
+    ``MASTER BED 17'0"X16'0"``.  Returning them lets the parser anchor scale to
+    real printed sizes and name/type rooms instead of guessing from geometry.
+    """
+    try:
+        import pymupdf
+    except ImportError:  # pragma: no cover - environment dependent
+        return {"labels": [], "overall_dims": [], "page_size_pt": None}
+    try:
+        with pymupdf.open(str(path)) as document:
+            if page_index >= document.page_count:
+                return {"labels": [], "page_size_pt": None}
+            page = document[page_index]
+            rect = page.rect
+            labels: List[Dict] = []
+            for block in page.get_text("dict")["blocks"]:
+                if block.get("type") != 0:
+                    continue
+                text = "\n".join(
+                    "".join(span["text"] for span in line["spans"]) for line in block["lines"]
+                )
+                for match in _LABEL_RE.finditer(text):
+                    width_m = _feet_inches_to_m(match.group("fw"), match.group("fi"))
+                    height_m = _feet_inches_to_m(match.group("hw"), match.group("hi"))
+                    if not (0.5 <= width_m <= 40 and 0.5 <= height_m <= 40):
+                        continue
+                    x0, y0, x1, y1 = block["bbox"]
+                    labels.append(
+                        {
+                            "name": " ".join(match.group("name").split()),
+                            "width_m": round(width_m, 3),
+                            "height_m": round(height_m, 3),
+                            "center_pt": [round((x0 + x1) / 2.0, 2), round((y0 + y1) / 2.0, 2)],
+                        }
+                    )
+            overall_dims: List[Dict] = []
+            for x0, y0, x1, y1, word, *_rest in page.get_text("words"):
+                match = _DIM_ONLY_RE.match(word)
+                if not match:
+                    continue
+                value_m = _feet_inches_to_m(match.group("feet"), match.group("inch"))
+                if not (2.0 <= value_m <= 100.0):
+                    continue
+                overall_dims.append(
+                    {
+                        "value_m": round(value_m, 3),
+                        "axis": "h" if (x1 - x0) >= (y1 - y0) else "v",
+                        "center_pt": [round((x0 + x1) / 2.0, 2), round((y0 + y1) / 2.0, 2)],
+                    }
+                )
+            return {
+                "labels": labels,
+                "overall_dims": overall_dims,
+                "page_size_pt": [round(rect.width, 2), round(rect.height, 2)],
+            }
+    except Exception:
+        return {"labels": [], "overall_dims": [], "page_size_pt": None}
+
+
+def label_room_type(name: str) -> Optional[str]:
+    lowered = name.lower()
+    rules = (
+        ("kitchen", ("kitchen", "pantry")),
+        ("bathroom", ("toilet", "bath", "wc", "washroom")),
+        ("bedroom", ("bed", "bedroom")),
+        ("dining_room", ("dining",)),
+        ("living_room", ("living", "lounge", "family", "hall")),
+        ("entrance", ("portico", "porch", "foyer", "entrance", "verandah", "veranda")),
+        ("balcony", ("balcony", "terrace")),
+        ("hallway", ("stair", "corridor", "passage", "lobby", "dress")),
+    )
+    for room_type, keywords in rules:
+        if any(keyword in lowered for keyword in keywords):
+            return room_type
+    return None
 
 
 def _run_lengths(mask: np.ndarray) -> np.ndarray:
@@ -213,9 +336,11 @@ class ImprovedFloorPlanParser:
             )
         return result
 
-    def _read_plan_image(self, path: Path, job_id: str) -> np.ndarray:
+    def _read_plan_image(
+        self, path: Path, job_id: str, page_index: int = 0
+    ) -> np.ndarray:
         if path.suffix.lower() == ".pdf":
-            path = _rasterize_pdf(path, job_id)
+            path = _rasterize_pdf(path, job_id, page_index)
         image = _load_rgb_image(path)
         if max(image.size) > MAX_IMAGE_SIDE:
             scale = MAX_IMAGE_SIDE / max(image.size)
@@ -236,6 +361,7 @@ class ImprovedFloorPlanParser:
         known_length: Optional[float],
         progress_callback=None,
         preprocessing: Optional[Dict] = None,
+        page_index: int = 0,
     ) -> Dict:
         return await asyncio.to_thread(
             self._parse_floor_plan_sync,
@@ -245,6 +371,7 @@ class ImprovedFloorPlanParser:
             known_length,
             progress_callback,
             preprocessing,
+            page_index,
         )
 
     def _parse_floor_plan_sync(
@@ -255,6 +382,7 @@ class ImprovedFloorPlanParser:
         known_length: Optional[float],
         progress_callback=None,
         preprocessing: Optional[Dict] = None,
+        page_index: int = 0,
     ) -> Dict:
         def emit(stage: str):
             if progress_callback is None:
@@ -265,6 +393,12 @@ class ImprovedFloorPlanParser:
                 pass
 
         warnings: List[str] = []
+        source_path = Path(floor_plan_path)
+        pdf_labels: Dict = (
+            extract_pdf_plan_labels(source_path, page_index)
+            if source_path.suffix.lower() == ".pdf"
+            else {"labels": [], "page_size_pt": None}
+        )
         preprocessing = preprocessing or {}
         wall_polarity = str(preprocessing.get("wall_polarity") or "auto").lower()
         if wall_polarity not in {"auto", "dark", "light"}:
@@ -274,7 +408,7 @@ class ImprovedFloorPlanParser:
             sealing_style = "auto"
         options_used = {"wall_polarity": wall_polarity, "sealing": sealing_style}
         try:
-            image = self._read_plan_image(Path(floor_plan_path), job_id)
+            image = self._read_plan_image(Path(floor_plan_path), job_id, page_index)
         except FloorPlanParseError as exc:
             return {"status": "failed", "error": str(exc), "error_code": "unreadable_plan"}
         except Exception as exc:
@@ -303,7 +437,13 @@ class ImprovedFloorPlanParser:
         min_line = max(14, int(min_side * 0.02))
 
         wall_mask, mask_meta, probe = self._extract_wall_mask(
-            gray, min_line, warnings, known_width, known_length, wall_polarity
+            gray,
+            min_line,
+            warnings,
+            known_width,
+            known_length,
+            wall_polarity,
+            color_image=image,
         )
 
         deskew_deg = 0.0
@@ -329,6 +469,7 @@ class ImprovedFloorPlanParser:
                     known_width,
                     known_length,
                     wall_polarity,
+                    color_image=candidate_image,
                 )
                 candidate_probe = candidate_probe or {}
                 candidates.append(
@@ -432,45 +573,129 @@ class ImprovedFloorPlanParser:
                 {"walls_bbox": walls_bbox, "mask": mask_meta},
             )
 
-        provisional_scale = probe.get("provisional_scale") or self._provisional_scale(
-            walls_bbox, known_width, known_length
-        )
-        door_max_px = max(10, int(MAX_DOOR_M * provisional_scale))
-        seal_caps = probe.get("caps") or {
-            "interior_px": max(door_max_px + max(4, int(0.01 * min_side)), int(0.08 * min_side)),
-            "exterior_px": max(int(2.4 * door_max_px), int(0.22 * min_side)),
-        }
-
-        attempts: List[Dict] = []
-        selected = None
-        for attempt in self._segmentation_attempts(seal_caps, sealing_style):
-            built = self._build_barrier(
-                lines, wall_mask, walls_bbox, attempt["interior_px"], attempt["exterior_px"]
-            )
-            rooms, room_labels, stats = self._segment_rooms(
-                built["barrier"], (height, width), warnings
-            )
-            record = {
-                "name": attempt["name"],
-                "kernel": attempt["kernel"],
-                "interior_seal_px": attempt["interior_px"],
-                "exterior_seal_px": attempt["exterior_px"],
-                "rooms": len(rooms),
-                "gap_count": len(built["gaps"]),
-                "border_leak_area": stats["border_area"],
-                "largest_component_area": stats["largest_area"],
+        def segment_layout(
+            mask_for_layout: np.ndarray,
+            meta_for_layout: Dict,
+            probe_for_layout: Optional[Dict],
+        ) -> Dict:
+            local_probe = probe_for_layout or {}
+            local_lines = local_probe.get("lines") or []
+            local_bbox = local_probe.get("bbox") or self._bounds_of_lines(local_lines)
+            local_provisional = local_probe.get(
+                "provisional_scale"
+            ) or self._provisional_scale(local_bbox, known_width, known_length)
+            local_door_max = max(10, int(MAX_SEALED_GAP_M * local_provisional))
+            local_caps = local_probe.get("caps") or {
+                "interior_px": max(
+                    local_door_max + max(4, int(0.01 * min_side)),
+                    int(0.05 * min_side),
+                ),
+                "exterior_px": max(int(2.4 * local_door_max), int(0.22 * min_side)),
             }
-            attempts.append(record)
-            if rooms and selected is None:
-                selected = {
-                    "attempt": attempt,
-                    "built": built,
-                    "rooms": rooms,
-                    "labels": room_labels,
-                    "stats": stats,
-                }
-                if attempt["kernel"] == 0 and not attempt.get("seal_all"):
-                    break
+            local_attempts: List[Dict] = []
+            local_selected = None
+            local_warnings: List[str] = []
+            for attempt in self._segmentation_attempts(local_caps, sealing_style):
+                built_local = self._build_barrier(
+                    local_lines,
+                    mask_for_layout,
+                    local_bbox,
+                    attempt["interior_px"],
+                    attempt["exterior_px"],
+                )
+                rooms_local, labels_local, stats_local = self._segment_rooms(
+                    built_local["barrier"], (height, width), local_warnings
+                )
+                local_attempts.append(
+                    {
+                        "name": attempt["name"],
+                        "kernel": attempt["kernel"],
+                        "interior_seal_px": attempt["interior_px"],
+                        "exterior_seal_px": attempt["exterior_px"],
+                        "rooms": len(rooms_local),
+                        "gap_count": len(built_local["gaps"]),
+                        "border_leak_area": stats_local["border_area"],
+                        "largest_component_area": stats_local["largest_area"],
+                    }
+                )
+                if rooms_local and local_selected is None:
+                    local_selected = {
+                        "attempt": attempt,
+                        "built": built_local,
+                        "rooms": rooms_local,
+                        "labels": labels_local,
+                        "stats": stats_local,
+                    }
+                    if attempt["kernel"] == 0 and not attempt.get("seal_all"):
+                        break
+            return {
+                "mask": mask_for_layout,
+                "meta": meta_for_layout,
+                "probe": local_probe,
+                "lines": local_lines,
+                "bbox": local_bbox,
+                "provisional": local_provisional,
+                "caps": local_caps,
+                "attempts": local_attempts,
+                "selected": local_selected,
+                "warnings": local_warnings,
+            }
+
+        chosen = segment_layout(wall_mask, mask_meta, probe)
+
+        labels_available = bool((pdf_labels or {}).get("labels"))
+        if labels_available and chosen["selected"] is not None:
+            # Hatch closing strength is resolution dependent: too small leaves
+            # hatch slivers that segment as fake rooms, too large welds real
+            # doorways shut. Try neighbouring kernels and keep whichever layout
+            # agrees best with the dimensions printed on the sheet.
+            base_kernel = self._hatch_kernel_for(min_side)
+            best_score = self._label_agreement(
+                chosen["selected"]["rooms"], pdf_labels, (height, width), chosen["bbox"]
+            )
+            for ratio in (0.001, 0.002, 0.003):
+                kernel_value = self._hatch_kernel_for(min_side, ratio)
+                if kernel_value == base_kernel:
+                    continue
+                alt_warnings: List[str] = []
+                alt_mask, alt_meta, alt_probe = self._extract_wall_mask(
+                    gray,
+                    min_line,
+                    alt_warnings,
+                    known_width,
+                    known_length,
+                    wall_polarity,
+                    kernel_value,
+                    color_image=image,
+                )
+                alt_probe = alt_probe or {}
+                if not (alt_probe.get("lines") or []):
+                    continue
+                alt_layout = segment_layout(alt_mask, alt_meta, alt_probe)
+                if alt_layout["selected"] is None:
+                    continue
+                alt_score = self._label_agreement(
+                    alt_layout["selected"]["rooms"],
+                    pdf_labels,
+                    (height, width),
+                    alt_layout["bbox"],
+                )
+                if alt_score > best_score:
+                    best_score = alt_score
+                    chosen = alt_layout
+
+        if chosen["warnings"]:
+            warnings.extend(chosen["warnings"])
+
+        wall_mask = chosen["mask"]
+        mask_meta = chosen["meta"]
+        probe = chosen["probe"]
+        lines = chosen["lines"]
+        walls_bbox = chosen["bbox"]
+        provisional_scale = chosen["provisional"]
+        seal_caps = chosen["caps"]
+        attempts = chosen["attempts"]
+        selected = chosen["selected"]
 
         if selected is None:
             built = self._build_barrier(
@@ -522,10 +747,39 @@ class ImprovedFloorPlanParser:
         gaps = built["gaps"]
         wall_segments = built["wall_segments"]
 
-        scale, scale_source, scale_verified = self._resolve_scale(
-            walls_bbox, rooms, known_width, known_length, warnings
+        matched_labels, label_scale, dimension_scale = self._match_plan_labels(
+            rooms, pdf_labels, (height, width), walls_bbox
         )
+        scale, scale_source, scale_verified = self._resolve_scale(
+            walls_bbox, rooms, known_width, known_length, warnings, dimension_scale, label_scale
+        )
+        if scale_source == "estimated_from_dimensions":
+            warnings.append(
+                "Scale was calibrated from the overall dimension strings printed on "
+                "the PDF sheet."
+            )
+        elif scale_source == "estimated_from_labels":
+            warnings.append(
+                "Scale was calibrated from the printed room dimensions in the PDF "
+                "text layer."
+            )
         rooms = self._drop_unusable_rooms(rooms, scale, warnings)
+        label_hints: List[Dict] = []
+        if matched_labels:
+            by_id = {int(room["id"]): room for room in rooms}
+            for hint in matched_labels:
+                room = by_id.get(int(hint["room_id"]))
+                if room is None:
+                    continue
+                room["label_name"] = hint["name"]
+                if hint.get("room_type"):
+                    room["label_room_type"] = hint["room_type"]
+                label_hints.append(hint)
+            if label_hints:
+                warnings.append(
+                    f"{len(label_hints)} room label(s) were read from the PDF text "
+                    "layer and used for naming and scale."
+                )
         if not rooms:
             return self._fail_with_diagnostics(
                 job_id,
@@ -676,6 +930,7 @@ class ImprovedFloorPlanParser:
 
         return {
             "status": "completed",
+            "page_index": page_index,
             "image_dimensions": [int(width), int(height)],
             "preprocessing": options_used,
             "deskew_deg": round(deskew_deg, 2),
@@ -690,6 +945,7 @@ class ImprovedFloorPlanParser:
                 "height": round(walls_bbox["height"] / scale, 3),
             },
             "rooms": rooms,
+            "label_hints": label_hints,
             "wall_segments": wall_segments,
             "doorways": doorways,
             "windows": windows,
@@ -778,6 +1034,17 @@ class ImprovedFloorPlanParser:
     # ------------------------------------------------------------------
     # Mask selection
     # ------------------------------------------------------------------
+    @staticmethod
+    def _hatch_kernel_for(min_side: int, ratio: float = 0.0015) -> int:
+        """Morphology kernel for closing CAD wall hatching.
+
+        The white slivers between hatch strokes scale with the rasterisation
+        resolution, so the kernel is derived from the image side rather than
+        fixed. Values around 0.0015 of the short side close hatching without
+        bridging real doorways.
+        """
+        return max(3, int(round(min_side * ratio)) | 1)
+
     def _extract_wall_mask(
         self,
         gray: np.ndarray,
@@ -786,6 +1053,8 @@ class ImprovedFloorPlanParser:
         known_width: Optional[float] = None,
         known_length: Optional[float] = None,
         polarity: str = "auto",
+        hatch_kernel_size: Optional[int] = None,
+        color_image: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, Dict, Optional[Dict]]:
         height, width = gray.shape
         smooth = cv2.GaussianBlur(gray, (3, 3), 0)
@@ -793,9 +1062,28 @@ class ImprovedFloorPlanParser:
         max_thickness = max(6, int(0.12 * min_side))
 
         candidates: List[Dict] = []
+        if hatch_kernel_size is None:
+            hatch_kernel_size = self._hatch_kernel_for(min_side)
+        hatch_kernel_size = int(hatch_kernel_size)
+        hatch_kernel = (
+            cv2.getStructuringElement(
+                cv2.MORPH_RECT, (hatch_kernel_size, hatch_kernel_size)
+            )
+            if hatch_kernel_size >= 3
+            else None
+        )
+
+        def close_hatching(binary: np.ndarray) -> np.ndarray:
+            if hatch_kernel_size < 3:
+                return binary
+            # CAD plans hatch the wall poché with diagonal strokes; the white
+            # slivers between strokes otherwise segment as fake rooms.
+            closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, hatch_kernel)
+            return cv2.morphologyEx(closed, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
 
         def add_candidate(source: np.ndarray, threshold: int, method: str, inverted: bool):
             _, binary = cv2.threshold(source, threshold, 255, cv2.THRESH_BINARY_INV)
+            binary = close_hatching(binary)
             binary = _clean_specks(binary, max(20, int(0.00002 * height * width)))
             foreground = float(np.count_nonzero(binary)) / float(height * width)
             if foreground < 0.0005 or foreground > 0.72:
@@ -826,6 +1114,7 @@ class ImprovedFloorPlanParser:
             adaptive = cv2.adaptiveThreshold(
                 smooth, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, block, 9
             )
+            adaptive = close_hatching(adaptive)
             adaptive = _clean_specks(adaptive, max(20, int(0.00002 * height * width)))
             foreground = float(np.count_nonzero(adaptive)) / float(height * width)
             if 0.0005 <= foreground <= 0.72:
@@ -876,7 +1165,14 @@ class ImprovedFloorPlanParser:
             }, None
 
         return self._select_wall_mask(
-            candidates, min_line, min_side, known_width, known_length, warnings, polarity
+            candidates,
+            min_line,
+            min_side,
+            known_width,
+            known_length,
+            warnings,
+            polarity,
+            color_image=color_image,
         )
 
     def _select_wall_mask(
@@ -888,6 +1184,7 @@ class ImprovedFloorPlanParser:
         known_length: Optional[float],
         warnings: List[str],
         requested_polarity: str = "auto",
+        color_image: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, Dict, Optional[Dict]]:
         """Pick the mask whose layout is physically plausible, not merely the busiest.
 
@@ -899,7 +1196,12 @@ class ImprovedFloorPlanParser:
         """
         for candidate in candidates:
             candidate["probe"] = self._probe_layout(
-                candidate["mask"], min_line, min_side, known_width, known_length
+                candidate["mask"],
+                min_line,
+                min_side,
+                known_width,
+                known_length,
+                color_image=color_image,
             )
 
         def layout_distance(a: Dict, b: Dict) -> int:
@@ -1027,6 +1329,7 @@ class ImprovedFloorPlanParser:
         min_side: int,
         known_width: Optional[float],
         known_length: Optional[float],
+        color_image: Optional[np.ndarray] = None,
     ) -> Dict:
         structural = self._extract_structural_bands(mask, min_line, min_side)
         segments = structural["segments"]
@@ -1049,7 +1352,7 @@ class ImprovedFloorPlanParser:
             return probe
 
         lines, line_diagnostics = self._group_wall_lines(
-            mask, segments, min_line, min_side, []
+            mask, segments, min_line, min_side, [], color_image=color_image
         )
         probe["lines"] = lines
         probe["line_diagnostics"] = line_diagnostics
@@ -1065,10 +1368,17 @@ class ImprovedFloorPlanParser:
 
         provisional_scale = self._provisional_scale(bbox, known_width, known_length)
         probe["provisional_scale"] = provisional_scale
-        door_max_px = max(10, int(MAX_DOOR_M * provisional_scale))
+        door_max_px = max(10, int(MAX_SEALED_GAP_M * provisional_scale))
+        thickness_hint = float(line_diagnostics.get("thickness_hint_px") or 1.0)
+        # Door leaves span several wall thicknesses. This floor keeps doorway
+        # sealing working when supplied dimensions imply a pixels-per-metre
+        # scale far smaller than the drawing resolution.
+        doorway_floor = int(math.ceil(thickness_hint * 5.5))
         caps = {
             "interior_px": max(
-                door_max_px + max(4, int(0.01 * min_side)), int(0.08 * min_side)
+                door_max_px + max(4, int(0.01 * min_side)),
+                int(0.05 * min_side),
+                doorway_floor,
             ),
             "exterior_px": max(int(2.4 * door_max_px), int(0.22 * min_side)),
         }
@@ -1225,6 +1535,7 @@ class ImprovedFloorPlanParser:
         min_line: int,
         min_side: int,
         warnings: List[str],
+        color_image: Optional[np.ndarray] = None,
     ) -> Tuple[List[Dict], Dict]:
         clusters: List[Dict] = []
         for orientation in ("horizontal", "vertical"):
@@ -1281,7 +1592,12 @@ class ImprovedFloorPlanParser:
             if segment["length_px"] >= min_line
         ]
         thickness_hint = float(np.median(weighted)) if weighted else 1.0
-        min_line_thickness = max(1, int(thickness_hint * 0.5)) if thickness_hint >= 3 else 1
+        # Wall poché is the thickest repeated stroke on a plan. Thinner runs are
+        # furniture outlines, door leaves and dashed dimension strings; keeping
+        # them lets gap sealing fabricate walls through the middle of a room.
+        min_line_thickness = (
+            max(2, int(math.ceil(thickness_hint * 0.65))) if thickness_hint >= 3 else 1
+        )
 
         lines: List[Dict] = []
         for cluster in clusters:
@@ -1303,13 +1619,178 @@ class ImprovedFloorPlanParser:
                 "No stable wall lines were found; check that the plan is orthographic and "
                 "that wall thickness is consistent."
             )
+        lines, decorative_diagnostics = self._drop_decorative_runs(
+            lines, wall_mask, color_image, min_side, warnings
+        )
+        if not lines:
+            warnings.append(
+                "No stable wall lines remained after colour filtering; check that walls "
+                "are drawn in a neutral tone."
+            )
         diagnostics = {
             "thickness_hint_px": round(thickness_hint, 2),
             "minimum_line_thickness_px": min_line_thickness,
             "candidate_clusters": len(clusters),
             "kept_lines": len(lines),
+            **decorative_diagnostics,
         }
         return lines, diagnostics
+
+    def _drop_decorative_runs(
+        self,
+        lines: List[Dict],
+        wall_mask: np.ndarray,
+        color_image: Optional[np.ndarray],
+        min_side: int,
+        warnings: List[str],
+    ) -> Tuple[List[Dict], Dict]:
+        """Drop decorative wall-line runs by ink colour.
+
+        Furniture, door leaves and dimension strings are tinted differently from
+        the wall poché (red beds on a tan plan, bright orange door leaves).  Those
+        runs sit collinear with real walls, so they survive thickness filtering
+        and then gap sealing welds them into full-height phantom partitions.  The
+        wall colour is calibrated from the exterior runs, so this adapts to any
+        palette instead of assuming black-on-white line work.
+        """
+        if (
+            color_image is None
+            or color_image.shape[:2] != wall_mask.shape[:2]
+            or not lines
+        ):
+            return lines, {"decorative_filter": "unavailable"}
+
+        hsv = cv2.cvtColor(color_image, cv2.COLOR_BGR2HSV)
+        hue = hsv[:, :, 0].astype(np.int16)
+        saturation = hsv[:, :, 1]
+        near_white = np.min(color_image, axis=2) >= 235
+        ink = (wall_mask > 0) & ~near_white
+        height, width = wall_mask.shape
+        bbox = self._bounds_of_lines(lines)
+
+        def is_exterior(line: Dict) -> bool:
+            slack = max(8, line["thickness_px"])
+            if line["orientation"] == "horizontal":
+                return (
+                    min(
+                        abs(line["pos"] - bbox["y"]),
+                        abs(line["pos"] - (bbox["y"] + bbox["height"])),
+                    )
+                    <= slack
+                )
+            return (
+                min(
+                    abs(line["pos"] - bbox["x"]),
+                    abs(line["pos"] - (bbox["x"] + bbox["width"])),
+                )
+                <= slack
+            )
+
+        def run_color(line: Dict, start: int, end: int) -> Optional[Tuple[float, float]]:
+            pos = int(round(line["pos"]))
+            half = max(1, int(line["thickness_px"]) // 2) + 1
+            if line["orientation"] == "horizontal":
+                lo, hi = max(0, pos - half), min(height, pos + half + 1)
+                cols = slice(max(0, start), min(width, end))
+                hues = hue[lo:hi, cols][ink[lo:hi, cols]]
+                sats = saturation[lo:hi, cols][ink[lo:hi, cols]]
+            else:
+                lo, hi = max(0, pos - half), min(width, pos + half + 1)
+                rows = slice(max(0, start), min(height, end))
+                hues = hue[rows, lo:hi][ink[rows, lo:hi]]
+                sats = saturation[rows, lo:hi][ink[rows, lo:hi]]
+            if hues.size < 8:
+                return None
+            return float(np.median(hues)), float(np.median(sats))
+
+        def hue_distance(a: float, b: float) -> float:
+            gap = abs(a - b) % 180.0
+            return min(gap, 180.0 - gap)
+
+        samples: List[Tuple[Dict, int, float, float]] = []
+        exterior_colors: List[Tuple[float, float]] = []
+        for line in lines:
+            exterior_line = is_exterior(line)
+            for index, (start, end) in enumerate(line["intervals"]):
+                color = run_color(line, start, end)
+                if color is None:
+                    continue
+                samples.append((line, index, color[0], color[1]))
+                if exterior_line:
+                    exterior_colors.append(color)
+
+        if len(exterior_colors) < 2:
+            return lines, {"decorative_filter": "skipped_no_reference"}
+
+        reference_hue = float(np.median([color[0] for color in exterior_colors]))
+        reference_sat = float(np.median([color[1] for color in exterior_colors]))
+        if reference_sat < 50:
+            # Neutral (black/grey) walls carry no usable hue; the mask is already
+            # clean, so leave it alone rather than invent a colour reference.
+            return lines, {"decorative_filter": "skipped_neutral_walls"}
+
+        min_hue_distance = 10.0
+        saturation_excess = 60.0
+        minimum_length = max(14, int(0.02 * min_side))
+        drop = set()
+        for line, index, run_hue, run_sat in samples:
+            start, end = line["intervals"][index]
+            if end - start < minimum_length or is_exterior(line):
+                continue
+            chromatic_drift = (
+                run_sat >= 60.0
+                and hue_distance(run_hue, reference_hue) > min_hue_distance
+            )
+            oversaturated = run_sat >= reference_sat + saturation_excess
+            if chromatic_drift or oversaturated:
+                drop.add((id(line), index))
+
+        if not drop:
+            return lines, {
+                "decorative_filter": "applied",
+                "hue_reference": round(reference_hue, 1),
+                "saturation_reference": round(reference_sat, 1),
+                "runs_dropped": 0,
+            }
+
+        total_length = sum(end - start for line in lines for start, end in line["intervals"])
+        dropped_length = sum(
+            line["intervals"][index][1] - line["intervals"][index][0]
+            for line, index, _, _ in samples
+            if (id(line), index) in drop
+        )
+        ratio = dropped_length / float(total_length or 1)
+        if ratio > 0.6:
+            warnings.append(
+                "Most wall runs are strongly coloured; colour filtering was skipped "
+                "so the building outline is not removed."
+            )
+            return lines, {
+                "decorative_filter": "rejected",
+                "hue_reference": round(reference_hue, 1),
+                "saturation_reference": round(reference_sat, 1),
+                "dropped_length_ratio": round(ratio, 3),
+            }
+
+        kept_lines: List[Dict] = []
+        for line in lines:
+            intervals = [
+                interval
+                for index, interval in enumerate(line["intervals"])
+                if (id(line), index) not in drop
+            ]
+            if intervals:
+                line["intervals"] = intervals
+                kept_lines.append(line)
+        return kept_lines, {
+            "decorative_filter": "applied",
+            "hue_reference": round(reference_hue, 1),
+            "saturation_reference": round(reference_sat, 1),
+            "hue_threshold": round(min_hue_distance, 1),
+            "saturation_threshold": round(reference_sat + saturation_excess, 1),
+            "runs_dropped": len(drop),
+            "dropped_length_ratio": round(ratio, 3),
+        }
 
     def _scan_wall_line(
         self, wall_mask: np.ndarray, line: Dict, min_line: int
@@ -1466,6 +1947,10 @@ class ImprovedFloorPlanParser:
         barrier = np.zeros((height, width), dtype=np.uint8)
         wall_segments = self._make_wall_segments(lines, walls_bbox)
         gaps: List[Dict] = []
+        # A doorway is flanked by wall runs. Short runs on both sides are dashes
+        # or furniture outlines, and sealing across them invents a wall that
+        # splits a room in two.
+        min_seal_flank = max(10, int(MIN_SEAL_FLANK_RATIO * min(height, width)))
 
         for line in lines:
             orientation = line["orientation"]
@@ -1487,9 +1972,10 @@ class ImprovedFloorPlanParser:
                 gap_width = start_b - end_a
                 if gap_width <= 0:
                     continue
-                sealed = gap_width <= seal_cap
-                if gap_width <= 3:
-                    sealed = True
+                flank_length = max(end_a - start_a, end_b - start_b)
+                sealed = gap_width <= seal_cap and (
+                    gap_width <= 3 or flank_length >= min_seal_flank
+                )
                 gap = {
                     "id": len(gaps),
                     "orientation": orientation,
@@ -1952,6 +2438,169 @@ class ImprovedFloorPlanParser:
             return walls_bbox["height"] / known_length
         return walls_bbox["width"] / DEFAULT_HOUSE_WIDTH_M
 
+    def _dimension_scale(
+        self,
+        pdf_labels: Dict,
+        rooms: List[Dict],
+        walls_bbox: Dict,
+        image_shape: Tuple[int, int],
+    ) -> Optional[float]:
+        """Calibrate scale from the drawing's own overall dimension strings.
+
+        CAD sheets print the building size (e.g. ``41'-6"`` above the plan and
+        ``45'`` beside it).  The building extent is taken from the union of
+        detected rooms rather than raw wall line work, which includes stray
+        dimension arrows and text.  Pick the nearest plausible dimension on each
+        axis and divide by that extent in pixels.
+        """
+        dims = (pdf_labels or {}).get("overall_dims") or []
+        page_size = (pdf_labels or {}).get("page_size_pt")
+        if not dims or not page_size:
+            return None
+        height, width = image_shape[0], image_shape[1]
+        sx = width / float(page_size[0])
+        sy = height / float(page_size[1])
+        if rooms:
+            xs0 = min(float(room["bounds_px"][0]) for room in rooms)
+            ys0 = min(float(room["bounds_px"][1]) for room in rooms)
+            xs1 = max(float(room["bounds_px"][0]) + float(room["bounds_px"][2]) for room in rooms)
+            ys1 = max(float(room["bounds_px"][1]) + float(room["bounds_px"][3]) for room in rooms)
+            extent = {"x": xs0, "y": ys0, "width": xs1 - xs0, "height": ys1 - ys0}
+        else:
+            extent = walls_bbox
+        bbox_w = float(extent["width"])
+        bbox_h = float(extent["height"])
+        candidates: List[Dict] = []
+        for dim in dims:
+            cx = float(dim["center_pt"][0]) * sx
+            cy = float(dim["center_pt"][1]) * sy
+            value_m = float(dim["value_m"])
+            if dim["axis"] == "h":
+                if cy < extent["y"]:
+                    distance = extent["y"] - cy
+                elif cy > extent["y"] + bbox_h:
+                    distance = cy - (extent["y"] + bbox_h)
+                else:
+                    continue
+                scale = bbox_w / value_m
+            else:
+                if cx < extent["x"]:
+                    distance = extent["x"] - cx
+                elif cx > extent["x"] + bbox_w:
+                    distance = cx - (extent["x"] + bbox_w)
+                else:
+                    continue
+                scale = bbox_h / value_m
+            footprint = bbox_w / scale if dim["axis"] == "h" else bbox_h / scale
+            if not (2.5 <= footprint <= 80):
+                continue
+            candidates.append({"scale": scale, "distance": distance, "axis": dim["axis"]})
+        if not candidates:
+            return None
+        horizontal = [
+            item for item in candidates if item["axis"] == "h"
+        ]
+        vertical = [item for item in candidates if item["axis"] == "v"]
+        picks = []
+        for axis_candidates in (horizontal, vertical):
+            if axis_candidates:
+                picks.append(min(axis_candidates, key=lambda item: abs(item["distance"]))["scale"])
+        if not picks:
+            return None
+        scale = float(np.mean(picks))
+        return scale if scale > 0 else None
+
+    def _label_agreement(
+        self,
+        rooms: List[Dict],
+        pdf_labels: Dict,
+        image_shape: Tuple[int, int],
+        walls_bbox: Dict,
+    ) -> Tuple[int, int, int]:
+        """Score how well a segmentation matches the sheet's printed labels.
+
+        A good segmentation places every room label in its own room and yields
+        one consistent pixels-per-metre value across all labelled rooms;
+        over-segmentation fragments rooms and merges destroy labels.
+        """
+        matched, _, _ = self._match_plan_labels(rooms, pdf_labels, image_shape, walls_bbox)
+        distinct = len({int(hit["room_id"]) for hit in matched})
+        duplicates = len(matched) - distinct
+        scales = [float(hit["scale_px_per_m"]) for hit in matched]
+        consistent = 0
+        if scales:
+            median_scale = float(np.median(scales))
+            if median_scale > 0:
+                consistent = sum(
+                    1 for scale in scales
+                    if abs(scale - median_scale) / median_scale <= 0.15
+                )
+        # Two labels landing in one room means a merge or a misassignment, so
+        # distinct rooms outrank raw match count.
+        return (distinct, consistent, -duplicates)
+
+    def _match_plan_labels(
+        self,
+        rooms: List[Dict],
+        pdf_labels: Dict,
+        image_shape: Tuple[int, int],
+        walls_bbox: Dict,
+    ) -> Tuple[List[Dict], Optional[float], Optional[float]]:
+        """Attach printed PDF labels to the rooms that contain them.
+
+        Each label prints exact room dimensions, so the ratio of room pixels to
+        printed metres gives a per-room scale; the median across rooms anchors
+        the drawing even when other regions segment poorly.
+        """
+        labels = (pdf_labels or {}).get("labels") or []
+        page_size = (pdf_labels or {}).get("page_size_pt")
+        dimension_scale = self._dimension_scale(pdf_labels, rooms, walls_bbox, image_shape)
+        if not labels or not page_size:
+            return [], None, dimension_scale
+        height, width = image_shape[0], image_shape[1]
+        sx = width / float(page_size[0])
+        sy = height / float(page_size[1])
+        matched: List[Dict] = []
+        scales: List[float] = []
+        for label in labels:
+            cx = float(label["center_pt"][0]) * sx
+            cy = float(label["center_pt"][1]) * sy
+            owner = None
+            owner_area = None
+            for room in rooms:
+                x, y, w, h = room["bounds_px"]
+                if not (x <= cx <= x + w and y <= cy <= y + h):
+                    continue
+                area = float(w) * float(h)
+                if owner is None or area < owner_area:
+                    owner = room
+                    owner_area = area
+            if owner is None:
+                continue
+            w_px, h_px = float(owner["bounds_px"][2]), float(owner["bounds_px"][3])
+            width_m = float(label["width_m"])
+            height_m = float(label["height_m"])
+            direct = (w_px / width_m + h_px / height_m) / 2.0
+            swapped = (w_px / height_m + h_px / width_m) / 2.0
+            direct_err = abs(w_px / width_m - h_px / height_m) / max(direct, 1e-6)
+            swapped_err = abs(w_px / height_m - h_px / width_m) / max(swapped, 1e-6)
+            scale = direct if direct_err <= swapped_err else swapped
+            matched.append(
+                {
+                    "room_id": int(owner["id"]),
+                    "name": label["name"],
+                    "room_type": label_room_type(label["name"]),
+                    "width_m": label["width_m"],
+                    "height_m": label["height_m"],
+                    "scale_px_per_m": round(scale, 2),
+                }
+            )
+            scales.append(scale)
+        label_scale = float(np.median(scales)) if len(scales) >= 2 else None
+        if dimension_scale is None:
+            dimension_scale = label_scale
+        return matched, label_scale, dimension_scale
+
     def _resolve_scale(
         self,
         walls_bbox: Dict,
@@ -1959,6 +2608,8 @@ class ImprovedFloorPlanParser:
         known_width: Optional[float],
         known_length: Optional[float],
         warnings: List[str],
+        dimension_scale: Optional[float] = None,
+        label_scale: Optional[float] = None,
     ) -> Tuple[float, str, bool]:
         candidates = []
         if known_width and known_width > 0:
@@ -1980,6 +2631,18 @@ class ImprovedFloorPlanParser:
                 )
             else:
                 return scale, "provided_dimensions", verified
+
+        if dimension_scale and dimension_scale > 0:
+            footprint_width_m = walls_bbox["width"] / dimension_scale
+            footprint_length_m = walls_bbox["height"] / dimension_scale
+            if 2.5 <= footprint_width_m <= 80 and 2.5 <= footprint_length_m <= 80:
+                return dimension_scale, "estimated_from_dimensions", False
+
+        if label_scale and label_scale > 0:
+            footprint_width_m = walls_bbox["width"] / label_scale
+            footprint_length_m = walls_bbox["height"] / label_scale
+            if 2.5 <= footprint_width_m <= 80 and 2.5 <= footprint_length_m <= 80:
+                return label_scale, "estimated_from_labels", False
 
         room_sides = [
             min(room["bounds_px"][2], room["bounds_px"][3])

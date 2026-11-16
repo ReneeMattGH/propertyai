@@ -45,6 +45,28 @@ export interface ReconstructionJob {
   furnishing_variant?: number | null
   furniture_count?: number | null
   furniture_url?: string | null
+  floor_count?: number | null
+  floors?: FloorSummary[] | null
+}
+
+export interface FloorSummary {
+  index: number
+  label: string
+  source_filename?: string | null
+  page_index?: number
+  rooms?: number
+  image_dimensions?: [number, number] | null
+  scale_pixels_per_meter?: number | null
+  scale_source?: string | null
+  scale_verified?: boolean
+  footprint_m?: { width?: number; height?: number } | null
+  warnings?: string[]
+  room_ids?: number[]
+  preview_url?: string | null
+  normalized_plan_url?: string | null
+  y_offset?: number
+  geometry_valid?: boolean
+  navigation_available?: boolean
 }
 
 export interface RoomTypeEntry {
@@ -63,6 +85,8 @@ export interface RoomTypeEntry {
   polygon_px?: [number, number][] | null
   polygon_m?: [number, number][] | null
   polygon?: [number, number][] | null
+  floor?: number
+  floor_label?: string
 }
 
 export interface RoomTypeReviewSummary {
@@ -104,6 +128,9 @@ export interface RoomTypeReview {
   variant?: number | null
   floor_plan_url: string
   normalized_floor_plan_url?: string | null
+  multi_floor?: boolean
+  floor_count?: number
+  floors?: FloorSummary[]
 }
 
 export interface FurnitureItem {
@@ -120,6 +147,9 @@ export interface FurnitureItem {
   scale: [number, number, number]
   size_m?: [number, number, number]
   height_m?: number | null
+  floor?: number
+  floor_label?: string
+  y_offset?: number
   footprint?: { min: [number, number]; max: [number, number] } | null
   bbox?: { min: [number, number, number]; max: [number, number, number] } | null
   collision: boolean
@@ -268,6 +298,16 @@ export interface Doorway {
   detected_width_m?: number
   rooms: [number | null, number | null]
   exterior?: boolean
+  floor?: number
+  floor_label?: string
+}
+
+export interface CollisionWall {
+  min: [number, number]
+  max: [number, number]
+  exterior?: boolean
+  floor?: number
+  floor_label?: string
 }
 
 export interface CollisionRoom {
@@ -275,6 +315,11 @@ export interface CollisionRoom {
   bounds: [number, number, number, number]
   center: [number, number]
   area_m2?: number
+  name?: string | null
+  room_type?: string | null
+  floor?: number
+  floor_label?: string
+  y_offset?: number
 }
 
 export interface CollisionFurniture {
@@ -285,16 +330,19 @@ export interface CollisionFurniture {
   min: [number, number]
   max: [number, number]
   height_m?: number | null
+  floor?: number
+  floor_label?: string
+  y_offset?: number
 }
 
 export interface CollisionData {
   units: string
-  walls: { min: [number, number]; max: [number, number]; exterior?: boolean }[]
+  walls: CollisionWall[]
   doors: Doorway[]
   rooms: CollisionRoom[]
   furniture?: CollisionFurniture[]
   furniture_style?: string
-  spawn: { position: [number, number, number]; yaw: number }
+  spawn: { position: [number, number, number]; yaw: number; floor?: number; y_offset?: number }
   footprint?: { width: number; height: number }
   wall_height: number
   door_height: number
@@ -318,6 +366,9 @@ export interface RoomGraphNode {
   }[]
   furniture_count?: number
   furnishing_status?: string | null
+  floor?: number
+  floor_label?: string
+  y_offset?: number
 }
 
 export interface RoomGraph {
@@ -328,6 +379,8 @@ export interface RoomGraph {
     to: number
     position: [number, number]
     width_m: number
+    floor?: number
+    floor_label?: string
   }[]
   spawn_room: number
   reachable_rooms: number[]
@@ -366,6 +419,16 @@ export interface RoomAssignment {
   [key: string]: unknown
 }
 
+export interface SceneFloor {
+  index: number
+  label: string
+  y_offset: number
+  model_url: string
+  collision: CollisionData
+  room_graph: RoomGraph
+  metadata: SceneMetadata
+}
+
 export interface SceneBundle {
   job_id: string
   workflow?: string
@@ -373,6 +436,9 @@ export interface SceneBundle {
   collision: CollisionData
   room_graph: RoomGraph
   metadata: SceneMetadata
+  floors?: SceneFloor[]
+  num_floors?: number
+  floor_height?: number
   room_types?: RoomTypeEntry[]
   room_assignments?: RoomAssignment[]
   furniture?: FurnitureItem[]

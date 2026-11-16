@@ -29,6 +29,7 @@ or require photographs.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -64,7 +65,94 @@ for directory in (INPUT_DIR, FLOOR_PLANS_DIR, PHOTOS_DIR, GEOMETRY_DIR, OUTPUT_D
 MAX_FLOOR_PLAN_BYTES = 15 * 1024 * 1024
 MAX_PHOTO_BYTES = 15 * 1024 * 1024
 MAX_PHOTOS = 40
+MAX_FLOORS = 5
+# Storey pitch used to stack per-floor scenes in the walkthrough. Each floor is
+# built independently at the origin, so the frontend offsets it vertically.
+FLOOR_HEIGHT_M = 3.0
+FLOOR_LABELS = (
+    "Ground floor",
+    "First floor",
+    "Second floor",
+    "Third floor",
+    "Fourth floor",
+)
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+
+
+def _floor_label(index: int) -> str:
+    if 0 <= index < len(FLOOR_LABELS):
+        return FLOOR_LABELS[index]
+    return f"Floor {index + 1}"
+
+
+# Validation issues that only affect how far the player can walk. A scanned
+# plan with a missed doorway should still produce a walkthrough: the scene is
+# structurally sound, so the route is published with navigation_available=false
+# instead of discarding the whole reconstruction.
+NAVIGATION_ONLY_ISSUES = {
+    "room_unreachable",
+    "room_navigation_target_unreachable",
+    "doorway_side_no_space",
+    "doorway_side_unreachable",
+}
+STRUCTURAL_VALIDATION_CHECKS = (
+    "glb_exists",
+    "glb_size_plausible",
+    "glb_loadable",
+    "has_meshes",
+    "has_faces",
+    "finite_bounds",
+    "plausible_size",
+    "no_degenerate_faces",
+    "metadata_file",
+    "asset_job_match",
+    "collision_file",
+    "collision_walls",
+    "collision_walls_valid",
+    "collision_doors_current",
+    "doorway_openings_clear",
+    "spawn_present",
+    "spawn_walkable",
+    "room_graph",
+    "rooms_present",
+    "navigation_graph_current",
+    "photo_free_workflow",
+)
+
+
+def _navigation_only_failure(validation: Dict[str, Any]) -> bool:
+    """True when a scene is structurally valid but parts of it are unreachable."""
+    checks = validation.get("checks") or {}
+    if checks.get("spawn_present") is False or checks.get("spawn_clearance") is False:
+        return False
+    if any(checks.get(name) is False for name in STRUCTURAL_VALIDATION_CHECKS):
+        return False
+    for name in ("furniture_file", "furniture_placement_valid", "furniture_collision_match"):
+        if checks.get(name) is False:
+            return False
+    issues = (validation.get("stats") or {}).get("issues") or []
+    codes = {str(issue.get("code")) for issue in issues if issue.get("code")}
+    if not codes:
+        return False
+    return codes.issubset(NAVIGATION_ONLY_ISSUES)
+
+
+def _accept_degraded_navigation(validation: Dict[str, Any]) -> Dict[str, Any]:
+    issues = (validation.get("stats") or {}).get("issues") or []
+    messages = [
+        str(issue.get("message"))
+        for issue in issues
+        if issue.get("code") in NAVIGATION_ONLY_ISSUES and issue.get("message")
+    ]
+    accepted = dict(validation)
+    accepted["status"] = "completed"
+    accepted["geometry_valid"] = True
+    accepted["navigation_available"] = False
+    accepted["navigation_degraded"] = True
+    accepted["warnings"] = list(
+        dict.fromkeys(list(validation.get("warnings") or []) + messages)
+    )
+    return accepted
 
 
 class JobStatus:
@@ -415,6 +503,168 @@ def _confirmed_room_types(review: Optional[Dict]) -> List[Dict]:
     ]
 
 
+def _floor_room_offset(index: int) -> int:
+    """Room ids are namespaced per storey so one review covers every floor."""
+    return int(index) * 1000
+
+
+def _floor_summaries(per_floor: List[Dict]) -> List[Dict]:
+    summaries = []
+    for index, plan in enumerate(per_floor):
+        label = plan.get("floor_label") or _floor_label(index)
+        summaries.append(
+            {
+                "index": index,
+                "label": label,
+                "source_filename": plan.get("source_filename"),
+                "page_index": int(plan.get("page_index") or 0),
+                "rooms": len(plan.get("rooms") or []),
+                "image_dimensions": plan.get("image_dimensions"),
+                "scale_pixels_per_meter": plan.get("scale_pixels_per_meter"),
+                "scale_source": plan.get("scale_source"),
+                "scale_verified": bool(plan.get("scale_verified")),
+                "footprint_m": plan.get("footprint_m"),
+                "warnings": list(plan.get("warnings") or []),
+            }
+        )
+    return summaries
+
+
+def _floor_plan_diagnostics(per_floor: List[Dict]) -> Dict:
+    return {
+        "status": "completed",
+        "multi_floor": True,
+        "floor_count": len(per_floor),
+        "floors": [
+            {
+                "index": index,
+                "label": plan.get("floor_label") or _floor_label(index),
+                "status": plan.get("status"),
+                "rooms": len(plan.get("rooms") or []),
+                "scale_pixels_per_meter": plan.get("scale_pixels_per_meter"),
+                "scale_source": plan.get("scale_source"),
+                "scale_verified": bool(plan.get("scale_verified")),
+                "footprint_m": plan.get("footprint_m"),
+                "warnings": list(plan.get("warnings") or []),
+            }
+            for index, plan in enumerate(per_floor)
+        ],
+    }
+
+
+def _combine_floor_plans(per_floor: List[Dict]) -> Dict:
+    """Merge individually parsed storeys into one plan for room-type review.
+
+    Room and opening references are offset per floor so the confirmation screen
+    can show a single flat list. The untouched per-floor parse results stay on
+    disk; reconstruction builds each storey separately and stacks the scenes.
+    """
+    if not per_floor:
+        raise ValueError("At least one parsed floor is required")
+    footprint_widths = [
+        float((plan.get("footprint_m") or {}).get("width") or 0.0) for plan in per_floor
+    ]
+    footprint_heights = [
+        float((plan.get("footprint_m") or {}).get("height") or 0.0) for plan in per_floor
+    ]
+    combined: Dict[str, Any] = {
+        "status": "completed",
+        "multi_floor": True,
+        "floor_count": len(per_floor),
+        "image_dimensions": per_floor[0].get("image_dimensions"),
+        "preprocessing": per_floor[0].get("preprocessing") or {},
+        "deskew_deg": per_floor[0].get("deskew_deg"),
+        "scale_pixels_per_meter": per_floor[0].get("scale_pixels_per_meter"),
+        "scale_source": "per_floor",
+        "scale_verified": all(bool(plan.get("scale_verified")) for plan in per_floor),
+        "footprint_m": {
+            "width": round(max(footprint_widths), 3),
+            "height": round(max(footprint_heights), 3),
+        },
+        "rooms": [],
+        "wall_segments": [],
+        "doorways": [],
+        "windows": [],
+        "openings": [],
+        "label_hints": [],
+        "warnings": [],
+        "floors": [],
+    }
+    for index, plan in enumerate(per_floor):
+        offset = _floor_room_offset(index)
+        label = plan.get("floor_label") or _floor_label(index)
+        combined["floors"].append(
+            {
+                "index": index,
+                "label": label,
+                "image_dimensions": plan.get("image_dimensions"),
+                "scale_pixels_per_meter": plan.get("scale_pixels_per_meter"),
+                "scale_source": plan.get("scale_source"),
+                "scale_verified": bool(plan.get("scale_verified")),
+                "footprint_m": plan.get("footprint_m"),
+                "source_filename": plan.get("source_filename"),
+                "page_index": int(plan.get("page_index") or 0),
+                "room_ids": [
+                    int(room["id"]) + offset for room in plan.get("rooms") or []
+                ],
+            }
+        )
+        for room in plan.get("rooms") or []:
+            entry = copy.deepcopy(room)
+            entry["local_id"] = int(room["id"])
+            entry["id"] = int(room["id"]) + offset
+            entry["floor"] = index
+            entry["floor_label"] = label
+            combined["rooms"].append(entry)
+        for wall in plan.get("wall_segments") or []:
+            entry = copy.deepcopy(wall)
+            entry["floor"] = index
+            entry["floor_label"] = label
+            combined["wall_segments"].append(entry)
+        for doorway in plan.get("doorways") or []:
+            entry = copy.deepcopy(doorway)
+            entry["floor"] = index
+            entry["floor_label"] = label
+            entry["rooms"] = [
+                None if room_id is None else int(room_id) + offset
+                for room_id in (doorway.get("rooms") or [])
+            ]
+            combined["doorways"].append(entry)
+        for window in plan.get("windows") or []:
+            entry = copy.deepcopy(window)
+            entry["floor"] = index
+            entry["floor_label"] = label
+            room_id = window.get("room")
+            if room_id is not None:
+                entry["room"] = int(room_id) + offset
+            combined["windows"].append(entry)
+        for opening in plan.get("openings") or []:
+            entry = copy.deepcopy(opening)
+            entry["floor"] = index
+            entry["floor_label"] = label
+            if "rooms" in entry and entry["rooms"] is not None:
+                entry["rooms"] = [
+                    None if room_id is None else int(room_id) + offset
+                    for room_id in entry["rooms"]
+                ]
+            if entry.get("room") is not None:
+                entry["room"] = int(entry["room"]) + offset
+            combined["openings"].append(entry)
+        for hint in plan.get("label_hints") or []:
+            entry = copy.deepcopy(hint)
+            entry["room_id"] = int(hint["room_id"]) + offset
+            entry["floor"] = index
+            entry["floor_label"] = label
+            combined["label_hints"].append(entry)
+        for warning in plan.get("warnings") or []:
+            combined["warnings"].append(f"{label}: {warning}")
+    for key in ("wall_segments", "doorways", "windows", "openings"):
+        for position, entry in enumerate(combined[key]):
+            entry["id"] = position
+    combined["warnings"] = list(dict.fromkeys(combined["warnings"]))
+    return combined
+
+
 def _validated_style(style: Optional[str], current: Optional[str] = None) -> str:
     from furniture_assets import STYLES
 
@@ -500,6 +750,7 @@ def _apply_room_type_confirmation(
 def _public_job(job: Dict) -> Dict:
     payload = dict(job)
     payload.pop("floor_plan_path", None)
+    payload.pop("floor_plan_paths", None)
     payload.pop("photo_paths", None)
     payload["job_id"] = payload.pop("id")
     payload["stage_label"] = STAGE_LABELS.get(payload.get("current_stage", ""), payload.get("current_stage"))
@@ -1089,6 +1340,8 @@ class ReconstructionPipeline:
             )
 
             self._set_stage(job_id, JobStatus.DETECTING_ROOMS_OPENINGS)
+            prepared_plan_path = GEOMETRY_DIR / job_id / "floor_plan.json"
+            prepared_plan_path.parent.mkdir(parents=True, exist_ok=True)
             if manual_outline:
                 log_event(job_id, "Parsing user-supplied manual room outlines")
                 floor_plan_result = await self.parser.parse_manual_outline(
@@ -1101,67 +1354,194 @@ class ReconstructionPipeline:
                     manual_outline.get("wall_thickness_px"),
                     progress_callback=self._parser_progress(job_id),
                 )
+                self._check_cancelled(job_id)
+                if floor_plan_result.get("status") != "completed":
+                    diagnostics["floor_plan"] = floor_plan_result
+                    update_job(job_id, diagnostics=diagnostics)
+                    self._fail_job(
+                        job_id,
+                        JobStatus.DETECTING_ROOMS_OPENINGS,
+                        floor_plan_result.get("error", "Floor plan parsing failed"),
+                        floor_plan_result.get("error_code"),
+                        diagnostics,
+                    )
+                    return
+                prepared_plan_path.write_text(json.dumps(floor_plan_result, indent=2))
+                per_floor = [floor_plan_result]
             else:
-                floor_plan_result = await self.parser.parse_floor_plan(
-                    job_id,
-                    floor_plan_path,
-                    known_width,
-                    known_length,
-                    progress_callback=self._parser_progress(job_id),
-                    preprocessing=preprocessing,
-                )
-            self._check_cancelled(job_id)
-            diagnostics["floor_plan"] = floor_plan_result
+                from improved_floor_plan_parser import pdf_page_count
+
+                plan_paths = [
+                    str(path)
+                    for path in (job.get("floor_plan_paths") or [])
+                    if Path(path).is_file()
+                ]
+                if not plan_paths:
+                    plan_paths = [floor_plan_path]
+                sources: List[Dict[str, Any]] = []
+                for upload_index, path in enumerate(plan_paths):
+                    if path.lower().endswith(".pdf"):
+                        pages = max(1, pdf_page_count(Path(path)))
+                        for page_index in range(pages):
+                            sources.append(
+                                {
+                                    "path": path,
+                                    "page_index": page_index,
+                                    "upload_index": upload_index,
+                                }
+                            )
+                    else:
+                        sources.append(
+                            {"path": path, "page_index": 0, "upload_index": upload_index}
+                        )
+                if len(sources) > MAX_FLOORS:
+                    self._fail_job(
+                        job_id,
+                        JobStatus.PARSING_FLOOR_PLAN,
+                        f"At most {MAX_FLOORS} floors can be reconstructed at once; "
+                        f"{len(sources)} plan pages were supplied.",
+                        "too_many_floors",
+                        diagnostics,
+                    )
+                    return
+                multi_floor = len(sources) > 1
+                per_floor = []
+                for index, source in enumerate(sources):
+                    label = _floor_label(index)
+                    source_name = Path(source["path"]).name
+                    log_event(
+                        job_id,
+                        f"Parsing {label.lower()} ({source_name}"
+                        + (
+                            f", page {source['page_index'] + 1}"
+                            if source_name.lower().endswith(".pdf")
+                            else ""
+                        )
+                        + ")",
+                    )
+                    # Keep diagnostics for each storey in its own directory so
+                    # the review screen can show the right plan per floor.
+                    parser_job_id = f"{job_id}/floors/floor_{index}" if multi_floor else job_id
+                    result = await self.parser.parse_floor_plan(
+                        parser_job_id,
+                        source["path"],
+                        known_width if index == 0 else None,
+                        known_length if index == 0 else None,
+                        progress_callback=self._parser_progress(job_id),
+                        preprocessing=preprocessing,
+                        page_index=source["page_index"],
+                    )
+                    self._check_cancelled(job_id)
+                    if result.get("status") != "completed":
+                        diagnostics["floor_plan"] = result
+                        update_job(job_id, diagnostics=diagnostics)
+                        self._fail_job(
+                            job_id,
+                            JobStatus.DETECTING_ROOMS_OPENINGS,
+                            f"{label}: "
+                            + result.get("error", "Floor plan parsing failed"),
+                            result.get("error_code"),
+                            diagnostics,
+                        )
+                        return
+                    result["floor_index"] = index
+                    result["floor_label"] = label
+                    result["source_filename"] = source_name
+                    per_floor.append(result)
+                    if multi_floor:
+                        (
+                            GEOMETRY_DIR
+                            / job_id
+                            / "floors"
+                            / f"floor_{index}"
+                            / "floor_plan.json"
+                        ).write_text(json.dumps(result, indent=2))
+                        (GEOMETRY_DIR / job_id / f"floor_plan_floor_{index}.json").write_text(
+                            json.dumps(result, indent=2)
+                        )
+                    self._record_stage(
+                        job_id,
+                        stage_records,
+                        "floor_plan_parse",
+                        "completed",
+                        {
+                            "floor": index,
+                            "floor_label": label,
+                            "rooms": len(result["rooms"]),
+                            "walls": len(result["wall_segments"]),
+                            "doorways": len(result["doorways"]),
+                            "windows": len(result.get("windows") or []),
+                            "scale_pixels_per_meter": result["scale_pixels_per_meter"],
+                            "scale_source": result["scale_source"],
+                            "scale_verified": bool(result.get("scale_verified")),
+                        },
+                    )
+                    log_event(
+                        job_id,
+                        f"{label} parsed: {len(result['rooms'])} rooms, "
+                        f"{len(result['wall_segments'])} walls, "
+                        f"{len(result['doorways'])} doorway(s), "
+                        f"{len(result.get('windows') or [])} window(s)",
+                    )
+
+                if multi_floor:
+                    floor_plan_result = _combine_floor_plans(per_floor)
+                    prepared_plan_path.write_text(
+                        json.dumps(floor_plan_result, indent=2)
+                    )
+                    update_job(
+                        job_id,
+                        num_floors=len(per_floor),
+                        floor_count=len(per_floor),
+                        floors=_floor_summaries(per_floor),
+                    )
+                else:
+                    floor_plan_result = per_floor[0]
+                    prepared_plan_path.write_text(
+                        json.dumps(floor_plan_result, indent=2)
+                    )
+                    update_job(job_id, num_floors=1, floor_count=1)
+            diagnostics["floor_plan"] = (
+                _floor_plan_diagnostics(per_floor) if len(per_floor) > 1 else floor_plan_result
+            )
             update_job(job_id, diagnostics=diagnostics)
-            if floor_plan_result.get("status") != "completed":
-                self._fail_job(
-                    job_id,
-                    JobStatus.DETECTING_ROOMS_OPENINGS,
-                    floor_plan_result.get("error", "Floor plan parsing failed"),
-                    floor_plan_result.get("error_code"),
-                    diagnostics,
-                )
-                return
-            prepared_plan_path = GEOMETRY_DIR / job_id / "floor_plan.json"
-            prepared_plan_path.parent.mkdir(parents=True, exist_ok=True)
-            prepared_plan_path.write_text(json.dumps(floor_plan_result, indent=2))
-            self._record_stage(
-                job_id,
-                stage_records,
-                "floor_plan_parse",
-                "completed",
-                {
-                    "rooms": len(floor_plan_result["rooms"]),
-                    "walls": len(floor_plan_result["wall_segments"]),
-                    "doorways": len(floor_plan_result["doorways"]),
-                    "windows": len(floor_plan_result.get("windows") or []),
-                    "scale_pixels_per_meter": floor_plan_result["scale_pixels_per_meter"],
-                    "scale_source": floor_plan_result["scale_source"],
-                    "scale_verified": bool(floor_plan_result.get("scale_verified")),
-                },
-            )
-            log_event(
-                job_id,
-                f"Floor plan parsed: {len(floor_plan_result['rooms'])} rooms, "
-                f"{len(floor_plan_result['wall_segments'])} walls, "
-                f"{len(floor_plan_result['doorways'])} doorway(s), "
-                f"{len(floor_plan_result.get('windows') or [])} window(s)",
-            )
 
             self._set_stage(job_id, JobStatus.VALIDATING_ROOM_LAYOUT)
             rooms = floor_plan_result["rooms"]
+            floor_by_room = {
+                int(room["id"]): int(room.get("floor", 0)) for room in rooms
+            }
+            label_hints = floor_plan_result.get("label_hints") or []
+            explicit = {
+                int(hint["room_id"]): hint["room_type"]
+                for hint in label_hints
+                if hint.get("room_type")
+            }
+            label_names = {
+                int(hint["room_id"]): hint["name"] for hint in label_hints if hint.get("name")
+            }
             inference = await asyncio.to_thread(
                 infer_room_types,
                 rooms,
                 floor_plan_result.get("doorways") or [],
                 floor_plan_result.get("windows") or [],
-                None,
+                explicit or None,
                 floor_plan_result.get("footprint_m"),
             )
+            for assignment in inference.get("rooms") or []:
+                room_id = int(assignment.get("room_id", -1))
+                floor_index = floor_by_room.get(room_id, 0)
+                assignment["floor"] = floor_index
+                assignment["floor_label"] = _floor_label(floor_index)
+                if room_id in label_names:
+                    assignment["name"] = label_names[room_id]
+                    assignment["label_text"] = label_names[room_id]
             review = {
                 "schema_version": "1.0",
                 "job_id": job_id,
                 **inference,
+                "floor_count": len(per_floor),
+                "floors": _floor_summaries(per_floor),
                 # The inferred types are a proposal: the user always confirms
                 # them before furniture is placed.
                 "requires_confirmation": True,
@@ -1305,6 +1685,18 @@ class ReconstructionPipeline:
                 {"rooms": len(room_metadata), "source": "user"},
             )
 
+            if floor_plan_result.get("multi_floor"):
+                await self._reconstruct_multi_floor(
+                    job_id,
+                    job,
+                    review,
+                    floor_plan_result,
+                    style,
+                    variant,
+                    stage_records,
+                )
+                return
+
             self._set_stage(job_id, JobStatus.OPTIMIZING_OPENINGS)
 
             from repair_engine import SceneRepairEngine
@@ -1399,6 +1791,21 @@ class ReconstructionPipeline:
             repair_log = repair_result.get("repair_log") or {}
             geometry_result = repair_result.get("geometry")
             validation_result = repair_result.get("validation") or {}
+            if (
+                geometry_result
+                and (
+                    not repair_result.get("ok")
+                    or not validation_result.get("geometry_valid")
+                )
+                and _navigation_only_failure(validation_result)
+            ):
+                validation_result = _accept_degraded_navigation(validation_result)
+                repair_result = {**repair_result, "ok": True}
+                log_event(
+                    job_id,
+                    "Navigation is partial, but the scene is structurally valid and "
+                    "will be published with unreachable rooms reported.",
+                )
             if furnishing.get("variant") is not None:
                 variant = int(furnishing.get("variant"))
             validation_result["scale_verified"] = bool(
@@ -1546,6 +1953,16 @@ class ReconstructionPipeline:
             limitations = list(
                 dict.fromkeys((geometry_result or {}).get("limitations", []))
             )
+            if validation_result.get("navigation_degraded"):
+                limitations = list(
+                    dict.fromkeys(
+                        limitations
+                        + [
+                            "Some rooms stay visible but cannot be reached because a "
+                            "connecting opening was not detected in the plan."
+                        ]
+                    )
+                )
             room_payload = []
             label_map = dict(ROOM_TYPE_LABELS)
             review_rooms = {
@@ -1808,6 +2225,895 @@ class ReconstructionPipeline:
             self._mark_cancelled(job_id)
         except Exception as exc:  # noqa: BLE001 - surface the real failure to the user
             self._mark_pipeline_error(job_id, exc)
+
+    async def _reconstruct_multi_floor(
+        self,
+        job_id: str,
+        job: Dict,
+        review: Dict,
+        floor_plan_result: Dict,
+        style: str,
+        variant: int,
+        stage_records: List[Dict],
+    ):
+        """Build every storey separately, then publish a stacked multi-floor scene."""
+        import asyncio
+
+        from furnishing import furnish_floor_plan
+        from repair_engine import SceneRepairEngine
+        from room_types import apply_names, normalize_confirmed_types
+
+        floor_entries = list(floor_plan_result.get("floors") or [])
+        if not floor_entries:
+            self._fail_job(
+                job_id,
+                JobStatus.GENERATING_GEOMETRY,
+                "No parsed floors are available for this reconstruction",
+                "multi_floor_plan_missing",
+            )
+            return
+        property_id = job.get("property_id") or job_id
+        output_root = OUTPUT_DIR / job_id
+        output_root.mkdir(parents=True, exist_ok=True)
+        known_dimensions = job.get("known_dimensions") or {}
+        review_by_id = {
+            int(entry["room_id"]): entry for entry in review.get("assignments") or []
+        }
+        review_rooms_by_id = {
+            int(entry["room_id"]): entry for entry in review.get("rooms") or []
+        }
+        floor_results: List[Dict[str, Any]] = []
+        warning_items: List[str] = []
+        limitation_items: List[str] = []
+
+        for entry in floor_entries:
+            index = int(entry.get("index", 0))
+            label = entry.get("label") or _floor_label(index)
+            offset = _floor_room_offset(index)
+            local_path = GEOMETRY_DIR / job_id / f"floor_plan_floor_{index}.json"
+            if not local_path.is_file():
+                self._fail_job(
+                    job_id,
+                    JobStatus.GENERATING_GEOMETRY,
+                    f"{label}: the parsed floor plan is missing; retry the job",
+                    "prepared_floor_missing",
+                )
+                return
+            local_plan = json.loads(local_path.read_text())
+            local_rooms = local_plan.get("rooms") or []
+            selections = [
+                {
+                    "room_id": room_id - offset,
+                    "room_type": meta["room_type"],
+                    "name": meta.get("name"),
+                }
+                for room_id, meta in sorted(review_by_id.items())
+                if offset <= room_id < offset + 1000
+            ]
+            fallback = [
+                {
+                    "room_id": room_id - offset,
+                    "room_type": meta.get("room_type"),
+                    "name": meta.get("name"),
+                }
+                for room_id, meta in sorted(review_rooms_by_id.items())
+                if offset <= room_id < offset + 1000
+            ]
+            try:
+                room_metadata = normalize_confirmed_types(
+                    {"rooms": selections} if selections else None,
+                    local_rooms,
+                    fallback=fallback,
+                )
+            except ValueError as exc:
+                self._fail_job(
+                    job_id,
+                    JobStatus.AWAITING_ROOM_TYPES,
+                    f"{label}: {exc}",
+                    "room_types_invalid",
+                )
+                return
+            apply_names(room_metadata, local_rooms)
+            for metadata in room_metadata.values():
+                metadata["source"] = "user"
+
+            floor_output = output_root / "floors" / f"floor_{index}"
+            floor_output.mkdir(parents=True, exist_ok=True)
+
+            async def _furnish(
+                plan,
+                metadata,
+                furnishing_style,
+                furnishing_variant,
+                allow_partial,
+            ):
+                return await asyncio.to_thread(
+                    furnish_floor_plan,
+                    plan.get("rooms") or [],
+                    metadata,
+                    plan.get("doorways") or [],
+                    plan.get("windows") or [],
+                    furnishing_style,
+                    furnishing_variant,
+                    allow_partial=allow_partial,
+                )
+
+            def _repair_progress(event, payload, _label=label):
+                if event == "repair_attempt":
+                    self._set_stage(job_id, JobStatus.OPTIMIZING_OPENINGS)
+                    actions = ", ".join(payload.get("actions") or [])
+                    log_event(
+                        job_id,
+                        f"{_label}: automatic repair attempt "
+                        f"{payload.get('attempt')}: {actions}",
+                    )
+                elif event == "repair_regenerate" and payload.get("rebuild"):
+                    self._set_stage(job_id, JobStatus.GENERATING_GEOMETRY)
+                elif event in ("repair_validate", "repair_conservative"):
+                    self._set_stage(
+                        job_id, JobStatus.VALIDATING_NAVIGATION_COLLISIONS
+                    )
+
+            async def _build_floor(
+                plan,
+                planned_furnishing,
+                furnishing_style,
+                _output=floor_output,
+                _metadata=room_metadata,
+                _index=index,
+            ):
+                geometry = await self.geometry_builder.build_geometry(
+                    job_id,
+                    plan,
+                    {},
+                    1,
+                    known_dimensions.get("width_meters") if _index == 0 else None,
+                    known_dimensions.get("length_meters") if _index == 0 else None,
+                    None,
+                    progress_callback=self._geometry_progress(job_id),
+                    photo_manifest=None,
+                    room_metadata=_metadata,
+                    use_photo_floor_textures=False,
+                    furnishing=planned_furnishing,
+                    style=furnishing_style,
+                    output_dir=_output,
+                )
+                return geometry
+
+            async def _validate_floor(geometry, plan, planned_furnishing):
+                self._check_cancelled(job_id)
+                return await self.validator.validate_scene(
+                    job_id,
+                    geometry,
+                    photo_manifest=None,
+                    floor_plan_result=plan,
+                    furnishing=planned_furnishing,
+                )
+
+            log_event(job_id, f"{label}: planning furniture and geometry")
+            repair_result = await SceneRepairEngine().run(
+                job_id=job_id,
+                plan=local_plan,
+                room_metadata=room_metadata,
+                style=style,
+                variant=variant,
+                furnish=_furnish,
+                build=_build_floor,
+                validate=_validate_floor,
+                progress=_repair_progress,
+                log=lambda message, _label=label: log_event(
+                    job_id, f"{_label}: {message}"
+                ),
+                abort=lambda: bool((get_job(job_id) or {}).get("cancel_requested")),
+            )
+            self._check_cancelled(job_id)
+
+            repaired_plan = repair_result.get("plan") or local_plan
+            furnishing = repair_result.get("furnishing") or {}
+            geometry_result = repair_result.get("geometry")
+            validation_result = repair_result.get("validation") or {}
+            if (
+                geometry_result
+                and (
+                    not repair_result.get("ok")
+                    or not validation_result.get("geometry_valid")
+                )
+                and _navigation_only_failure(validation_result)
+            ):
+                validation_result = _accept_degraded_navigation(validation_result)
+                repair_result = {**repair_result, "ok": True}
+                log_event(
+                    job_id,
+                    f"{label}: navigation is partial, but the scene is structurally valid "
+                    "and will be published with unreachable rooms reported.",
+                )
+            repair_diagnostics = self._repair_diagnostics(repair_result)
+            if (
+                not repair_result.get("ok")
+                or not geometry_result
+                or not validation_result.get("geometry_valid")
+            ):
+                message = repair_result.get("message") or "; ".join(
+                    validation_result.get("errors") or ["scene validation failed"]
+                )
+                self._persist_repair_artifacts(
+                    floor_output, repair_result, validation_result
+                )
+                self._fail_job(
+                    job_id,
+                    JobStatus.VALIDATING_NAVIGATION_COLLISIONS
+                    if geometry_result
+                    else JobStatus.GENERATING_GEOMETRY,
+                    f"{label}: {message}",
+                    repair_result.get("error_code") or "scene_validation_failed",
+                )
+                return
+            written = self._persist_repair_artifacts(
+                floor_output, repair_result, validation_result
+            )
+            repair_diagnostics["artifacts"] = written
+            floor_results.append(
+                {
+                    "index": index,
+                    "label": label,
+                    "offset": offset,
+                    "y_offset": round(index * FLOOR_HEIGHT_M, 3),
+                    "plan": repaired_plan,
+                    "room_metadata": room_metadata,
+                    "furnishing": furnishing,
+                    "geometry": geometry_result,
+                    "validation": validation_result,
+                    "repair": repair_diagnostics,
+                    "house_model": repair_result.get("house_model") or {},
+                    "output_dir": floor_output,
+                }
+            )
+            warning_items.extend(
+                f"{label}: {warning}"
+                for warning in (
+                    list(repaired_plan.get("warnings") or [])
+                    + list(furnishing.get("warnings") or [])
+                    + list(geometry_result.get("warnings") or [])
+                    + list(validation_result.get("warnings") or [])
+                )
+            )
+            limitation_items.extend(
+                f"{label}: {limitation}"
+                for limitation in geometry_result.get("limitations") or []
+            )
+            if validation_result.get("navigation_degraded"):
+                limitation_items.append(
+                    f"{label}: some rooms stay visible but cannot be reached because a "
+                    "connecting opening was not detected in the plan."
+                )
+            self._record_stage(
+                job_id,
+                stage_records,
+                "geometry_build",
+                "completed",
+                {
+                    "floor": index,
+                    "floor_label": label,
+                    "vertices": geometry_result["vertices_count"],
+                    "faces": geometry_result["faces_count"],
+                    "collision_walls": geometry_result["collision_walls"],
+                    "collision_furniture": geometry_result["collision_furniture"],
+                    "furniture_items": geometry_result["furniture_items"],
+                    "primary_asset": f"floors/floor_{index}/scene.glb",
+                    "repair_status": repair_diagnostics["status"],
+                },
+            )
+            self._record_stage(
+                job_id,
+                stage_records,
+                "scene_validation",
+                "completed",
+                {
+                    "floor": index,
+                    "floor_label": label,
+                    "geometry_valid": bool(validation_result.get("geometry_valid")),
+                    "navigation_available": bool(
+                        validation_result.get("navigation_available")
+                    ),
+                },
+            )
+            log_event(
+                job_id,
+                f"{label} built: {geometry_result['vertices_count']} vertices, "
+                f"{geometry_result['faces_count']} faces, "
+                f"{geometry_result['furniture_items']} furniture item(s)",
+            )
+
+        if not floor_results:
+            self._fail_job(
+                job_id,
+                JobStatus.GENERATING_GEOMETRY,
+                "No floor could be reconstructed",
+                "multi_floor_build_failed",
+            )
+            return
+
+        self._set_stage(job_id, JobStatus.LOADING_WALKTHROUGH)
+        merged = self._publish_multi_floor_scene(
+            job_id, property_id, job, floor_results, floor_plan_result, style, variant
+        )
+        warning_items.extend(merged["warnings"])
+        limitation_items.extend(merged["limitations"])
+
+        self._record_stage(
+            job_id,
+            stage_records,
+            "manifest",
+            "written",
+            {"assets": [asset["name"] for asset in merged["assets"]]},
+        )
+        update_job(
+            job_id,
+            status=JobStatus.COMPLETED,
+            current_stage=JobStatus.COMPLETED,
+            progress=100,
+            failed_stage=None,
+            error=None,
+            error_code=None,
+            review_required=False,
+            assignments_confirmed=False,
+            geometry_valid=all(bool(item["validation"].get("geometry_valid")) for item in floor_results),
+            navigation_available=all(
+                bool(item["validation"].get("navigation_available")) for item in floor_results
+            ),
+            scale_verified=all(
+                bool(item["plan"].get("scale_verified")) for item in floor_results
+            ),
+            warnings=merged["warnings"],
+            limitations=merged["limitations"],
+            assets=merged["assets"],
+            room_count=merged["room_count"],
+            room_types=merged["room_types"],
+            room_types_confirmed=True,
+            room_type_review=_room_type_summary(review),
+            furnishing_style=style,
+            furnishing_variant=variant,
+            furniture_count=merged["furniture_count"],
+            floor_count=len(floor_results),
+            num_floors=len(floor_results),
+            floors=merged["floors"],
+            stage_records=stage_records,
+        )
+        log_event(
+            job_id,
+            f"Multi-floor reconstruction completed: {len(floor_results)} storeys, "
+            f"{merged['room_count']} rooms, {merged['furniture_count']} furniture item(s)",
+        )
+
+    def _publish_multi_floor_scene(
+        self,
+        job_id: str,
+        property_id: str,
+        job: Dict,
+        floor_results: List[Dict[str, Any]],
+        combined_plan: Dict,
+        style: str,
+        variant: int,
+    ) -> Dict[str, Any]:
+        """Merge per-floor artifacts into the root scene consumed by the frontend."""
+        from furniture_assets import STYLE_LABELS
+        from geometry_builder import build_asset_entries
+        from room_types import ROOM_TYPE_LABELS
+
+        output_root = OUTPUT_DIR / job_id
+        floors = []
+        merged_collision: Dict[str, Any] = {
+            "units": "meters",
+            "walls": [],
+            "doors": [],
+            "rooms": [],
+            "furniture": [],
+            "spawn": None,
+            "footprint": {"width": 0.0, "height": 0.0},
+            "wall_height": None,
+            "door_height": None,
+            "furniture_style": style,
+        }
+        merged_graph: Dict[str, Any] = {
+            "nodes": [],
+            "edges": [],
+            "spawn_room": None,
+            "reachable_rooms": [],
+            "connected": True,
+            "navigation_available": True,
+            "floors": [],
+        }
+        merged_furniture: List[Dict] = []
+        merged_rooms: List[Dict] = []
+        base_metadata: Dict[str, Any] = {}
+        total_vertices = 0
+        total_faces = 0
+        total_doors = 0
+        total_windows = 0
+        total_items = 0
+        warning_items: List[str] = []
+        limitation_items: List[str] = []
+
+        for result in floor_results:
+            index = result["index"]
+            offset = result["offset"]
+            y_offset = result["y_offset"]
+            floor_dir = result["output_dir"]
+            collision = json.loads((floor_dir / "collision.json").read_text())
+            graph = json.loads((floor_dir / "room_graph.json").read_text())
+            metadata = json.loads((floor_dir / "metadata.json").read_text())
+            if not base_metadata:
+                base_metadata = metadata
+            total_vertices += int(metadata.get("vertices") or 0)
+            total_faces += int(metadata.get("faces") or 0)
+            total_doors += int(metadata.get("doorways_included") or 0)
+            total_windows += int(metadata.get("windows_included") or 0)
+            total_items += len(result["furnishing"].get("items") or [])
+
+            merged_collision["wall_height"] = merged_collision["wall_height"] or collision.get(
+                "wall_height"
+            )
+            merged_collision["door_height"] = merged_collision["door_height"] or collision.get(
+                "door_height"
+            )
+            for wall in collision.get("walls") or []:
+                merged_collision["walls"].append(
+                    {**wall, "floor": index, "floor_label": result["label"]}
+                )
+            for door in collision.get("doors") or []:
+                merged_collision["doors"].append(
+                    {
+                        **door,
+                        "rooms": [
+                            None if room_id is None else int(room_id) + offset
+                            for room_id in (door.get("rooms") or [])
+                        ],
+                        "floor": index,
+                        "floor_label": result["label"],
+                    }
+                )
+            for room in collision.get("rooms") or []:
+                merged_collision["rooms"].append(
+                    {
+                        **room,
+                        "id": int(room["id"]) + offset,
+                        "floor": index,
+                        "floor_label": result["label"],
+                        "y_offset": y_offset,
+                    }
+                )
+            for item in collision.get("furniture") or []:
+                merged_collision["furniture"].append(
+                    {
+                        **item,
+                        "item_id": f"f{index}_{item.get('item_id')}",
+                        "room_id": int(item["room_id"]) + offset,
+                        "floor": index,
+                        "floor_label": result["label"],
+                        "y_offset": y_offset,
+                    }
+                )
+
+            for node in graph.get("nodes") or []:
+                merged_graph["nodes"].append(
+                    {
+                        **node,
+                        "id": int(node["id"]) + offset,
+                        "floor": index,
+                        "floor_label": result["label"],
+                        "y_offset": y_offset,
+                    }
+                )
+            for edge in graph.get("edges") or []:
+                merged_graph["edges"].append(
+                    {
+                        **edge,
+                        "from": int(edge["from"]) + offset,
+                        "to": int(edge["to"]) + offset,
+                        "floor": index,
+                        "floor_label": result["label"],
+                    }
+                )
+            merged_graph["reachable_rooms"].extend(
+                int(room_id) + offset for room_id in graph.get("reachable_rooms") or []
+            )
+            merged_graph["connected"] = merged_graph["connected"] and bool(
+                graph.get("connected")
+            )
+            merged_graph["navigation_available"] = merged_graph["navigation_available"] and bool(
+                graph.get("navigation_available")
+            )
+            merged_graph["floors"].append(
+                {
+                    "index": index,
+                    "label": result["label"],
+                    "y_offset": y_offset,
+                    "spawn_room": int(graph.get("spawn_room") or 0) + offset,
+                    "connected": bool(graph.get("connected")),
+                    "navigation_available": bool(graph.get("navigation_available")),
+                    "reachable_rooms": [
+                        int(room_id) + offset
+                        for room_id in graph.get("reachable_rooms") or []
+                    ],
+                }
+            )
+            if merged_graph["spawn_room"] is None:
+                spawn_room = graph.get("spawn_room")
+                if spawn_room is not None:
+                    merged_graph["spawn_room"] = int(spawn_room) + offset
+            if merged_collision["spawn"] is None:
+                spawn = dict(collision.get("spawn") or {})
+                spawn_room = spawn.get("room_id")
+                if spawn_room is not None:
+                    spawn["room_id"] = int(spawn_room) + offset
+                spawn["floor"] = index
+                spawn["y_offset"] = y_offset
+                merged_collision["spawn"] = spawn
+            footprint = collision.get("footprint") or {}
+            merged_collision["footprint"]["width"] = max(
+                float(merged_collision["footprint"]["width"] or 0.0),
+                float(footprint.get("width") or 0.0),
+            )
+            merged_collision["footprint"]["height"] = max(
+                float(merged_collision["footprint"]["height"] or 0.0),
+                float(footprint.get("height") or 0.0),
+            )
+
+            for item in result["furnishing"].get("items") or []:
+                merged_furniture.append(
+                    {
+                        **item,
+                        "id": f"f{index}_{item.get('id')}",
+                        "room_id": int(item["room_id"]) + offset,
+                        "floor": index,
+                        "floor_label": result["label"],
+                        "y_offset": y_offset,
+                    }
+                )
+            rooms_by_id = {
+                int(room["id"]): room for room in result["plan"].get("rooms") or []
+            }
+            for room_id, metadata_entry in sorted(result["room_metadata"].items()):
+                room = rooms_by_id.get(room_id) or {}
+                merged_rooms.append(
+                    {
+                        "room_id": room_id + offset,
+                        "name": metadata_entry.get("name"),
+                        "room_type": metadata_entry.get("room_type"),
+                        "room_type_label": ROOM_TYPE_LABELS.get(
+                            metadata_entry.get("room_type")
+                        ),
+                        "source": "user",
+                        "area_m2": room.get("area_m2"),
+                        "bounds_m": room.get("bounds_m"),
+                        "polygon": room.get("polygon_m") or room.get("polygon"),
+                        "floor": index,
+                        "floor_label": result["label"],
+                        "y_offset": y_offset,
+                        "furniture": [
+                            f"f{index}_{item.get('id')}"
+                            for item in result["furnishing"].get("items") or []
+                            if int(item["room_id"]) == room_id
+                        ],
+                    }
+                )
+
+            warning_items.extend(
+                f"{result['label']}: {warning}"
+                for warning in result["validation"].get("warnings") or []
+            )
+            limitation_items.extend(
+                f"{result['label']}: {limitation}"
+                for limitation in result["geometry"].get("limitations") or []
+            )
+            floors.append(
+                {
+                    "index": index,
+                    "label": result["label"],
+                    "y_offset": y_offset,
+                    "rooms": len(result["plan"].get("rooms") or []),
+                    "vertices": int(metadata.get("vertices") or 0),
+                    "faces": int(metadata.get("faces") or 0),
+                    "doorways": int(metadata.get("doorways_included") or 0),
+                    "windows": int(metadata.get("windows_included") or 0),
+                    "furniture_items": len(result["furnishing"].get("items") or []),
+                    "geometry_valid": bool(
+                        result["validation"].get("geometry_valid")
+                    ),
+                    "navigation_available": bool(
+                        result["validation"].get("navigation_available")
+                    ),
+                    "scale": metadata.get("scale"),
+                    "spawn": collision.get("spawn"),
+                    "asset_dir": f"floors/floor_{index}",
+                    "model_url": f"/reconstructions/{job_id}/assets/floors/floor_{index}/scene.glb",
+                }
+            )
+
+        limitation_items = list(
+            dict.fromkeys(
+                limitation_items
+                + [
+                    "Floors are stacked at a fixed 3.0 m storey height. Stairs, ramps "
+                    "and lift cores are not modelled; use the floor switcher to move "
+                    "between storeys."
+                ]
+            )
+        )
+
+        merged_collision["footprint"] = {
+            "width": round(merged_collision["footprint"]["width"], 3),
+            "height": round(merged_collision["footprint"]["height"], 3),
+        }
+        merged_collision["rooms"].sort(key=lambda room: int(room["id"]))
+        merged_graph["reachable_rooms"] = sorted(set(merged_graph["reachable_rooms"]))
+
+        (output_root / "collision.json").write_text(
+            json.dumps(merged_collision, indent=2)
+        )
+        (output_root / "room_graph.json").write_text(
+            json.dumps(merged_graph, indent=2)
+        )
+        (output_root / "furniture.json").write_text(
+            json.dumps(
+                {
+                    "status": "completed",
+                    "style": style,
+                    "style_label": STYLE_LABELS.get(style, style),
+                    "variant": variant,
+                    "items": merged_furniture,
+                    "rooms": merged_rooms,
+                    "summary": {
+                        "rooms_total": len(merged_rooms),
+                        "items_total": len(merged_furniture),
+                        "floors": len(floor_results),
+                    },
+                    "multi_floor": True,
+                },
+                indent=2,
+            )
+        )
+        house_models = [
+            {
+                "floor": result["index"],
+                "floor_label": result["label"],
+                "model": result["house_model"],
+            }
+            for result in floor_results
+        ]
+        (output_root / "house_model.json").write_text(
+            json.dumps({"multi_floor": True, "floors": house_models}, indent=2)
+        )
+
+        metadata = dict(base_metadata)
+        metadata.update(
+            {
+                "job_id": job_id,
+                "num_floors": len(floor_results),
+                "floor_count": len(floor_results),
+                "floor_height": base_metadata.get("floor_height"),
+                "storey_height": FLOOR_HEIGHT_M,
+                "rooms": len(merged_rooms),
+                "vertices": total_vertices,
+                "faces": total_faces,
+                "doorways_included": total_doors,
+                "windows_included": total_windows,
+                "collision_walls": len(merged_collision["walls"]),
+                "collision_furniture": len(merged_collision["furniture"]),
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "room_types": [
+                    {
+                        "room_id": entry["room_id"],
+                        "name": entry["name"],
+                        "room_type": entry["room_type"],
+                        "source": "user",
+                        "floor": entry["floor"],
+                        "floor_label": entry["floor_label"],
+                    }
+                    for entry in merged_rooms
+                ],
+                "floors": floors,
+                "furnishing": {
+                    **(base_metadata.get("furnishing") or {}),
+                    "style": style,
+                    "style_label": STYLE_LABELS.get(style, style),
+                    "variant": variant,
+                    "items": len(merged_furniture),
+                    "floor_variants": [
+                        {
+                            "floor": result["index"],
+                            "label": result["label"],
+                            "variant": int(
+                                (result["furnishing"].get("variant") or variant)
+                            ),
+                            "items": len(result["furnishing"].get("items") or []),
+                        }
+                        for result in floor_results
+                    ],
+                },
+                "inferred": list(
+                    dict.fromkeys(
+                        list(base_metadata.get("inferred") or [])
+                        + [
+                            "Each storey was parsed from its own plan sheet and "
+                            "stacked at a fixed 3.0 m height; stair and lift "
+                            "geometry is not modelled."
+                        ]
+                    )
+                ),
+                "footprint_m": merged_collision["footprint"],
+            }
+        )
+        # Point every floor at its own published sub-directory.
+        metadata["method"] = dict(base_metadata.get("method") or {})
+        metadata["method"]["multi_floor"] = {
+            "strategy": "per-floor parse + per-floor 3D build, stacked at a fixed "
+            "storey height in the viewer",
+            "storey_height_m": FLOOR_HEIGHT_M,
+        }
+        (output_root / "metadata.json").write_text(json.dumps(metadata, indent=2))
+
+        root_validation = {
+            "status": "completed",
+            "geometry_valid": all(
+                bool(result["validation"].get("geometry_valid"))
+                for result in floor_results
+            ),
+            "navigation_available": all(
+                bool(result["validation"].get("navigation_available"))
+                for result in floor_results
+            ),
+            "checks": {
+                "floors_built": len(floor_results),
+                "floors_valid": sum(
+                    1
+                    for result in floor_results
+                    if result["validation"].get("geometry_valid")
+                ),
+            },
+            "warnings": list(dict.fromkeys(warning_items)),
+            "errors": [],
+            "stats": {
+                "rooms": len(merged_rooms),
+                "furniture_items": len(merged_furniture),
+                "vertices": total_vertices,
+                "faces": total_faces,
+            },
+        }
+        (output_root / "validation_report.json").write_text(
+            json.dumps(root_validation, indent=2)
+        )
+
+        # Keep the legacy single-scene path working: scene.glb at the root is
+        # the ground floor, while every storey is also published separately.
+        shutil.copyfile(
+            Path(floor_results[0]["output_dir"]) / "scene.glb",
+            output_root / "scene.glb",
+        )
+
+        asset_names = [
+            "scene.glb",
+            "collision.json",
+            "room_graph.json",
+            "metadata.json",
+            "house_model.json",
+            "furniture.json",
+            "validation_report.json",
+        ]
+        for result in floor_results:
+            for name in (
+                "scene.glb",
+                "collision.json",
+                "room_graph.json",
+                "metadata.json",
+                "house_model.json",
+            ):
+                asset_names.append(f"floors/floor_{result['index']}/{name}")
+        assets = build_asset_entries(output_root, asset_names)
+
+        manifest_payload = {
+            "schema_version": "3.0",
+            "workflow": "floor_plan_only",
+            "multi_floor": True,
+            "property_id": property_id,
+            "job_id": job_id,
+            "project_name": job.get("project_name"),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "format": "glb",
+            "primary_asset": "scene.glb",
+            "assets": assets,
+            "floors": floors,
+            "scene": {
+                "bounds": base_metadata.get("method", {}).get("bounds"),
+                "num_floors": len(floor_results),
+                "floor_height": base_metadata.get("floor_height"),
+                "storey_height": FLOOR_HEIGHT_M,
+                "rooms": len(merged_rooms),
+                "doors": total_doors,
+                "windows": total_windows,
+                "spawn": merged_collision["spawn"],
+                "scale": base_metadata.get("scale"),
+                "approximate": not all(
+                    bool(result["plan"].get("scale_verified"))
+                    for result in floor_results
+                ),
+                "furnishing_style": style,
+                "furniture_count": len(merged_furniture),
+            },
+            "method": metadata["method"],
+            "room_types": merged_rooms,
+            "rooms": merged_rooms,
+            "room_assignments": merged_rooms,
+            "furnishing": metadata["furnishing"],
+            "furniture": merged_furniture,
+            "stats": {
+                "rooms": len(merged_rooms),
+                "furniture_items": len(merged_furniture),
+                "floors": len(floor_results),
+            },
+            "inferred": metadata["inferred"],
+            "provenance": {
+                "property_id": property_id,
+                "job_id": job_id,
+                "engine": {
+                    "service": "RealEstAI Reconstruction Service",
+                    "version": app.version,
+                    "photographs_used": False,
+                    "furniture": "procedural asset library + deterministic constraints",
+                },
+                "inputs": {
+                    "floor_plan": (job.get("inputs") or {}).get("floor_plan"),
+                    "floor_plans": (job.get("inputs") or {}).get("floor_plans"),
+                    "num_floors": len(floor_results),
+                    "known_dimensions": job.get("known_dimensions"),
+                    "room_types_confirmed": True,
+                },
+                "stages": list((get_job(job_id) or {}).get("stage_records") or []),
+                "outputs": assets,
+                "warnings": list(dict.fromkeys(warning_items)),
+                "limitations": limitation_items,
+            },
+            "validation": root_validation,
+            "repair": {
+                "floors": [
+                    {
+                        "floor": result["index"],
+                        "label": result["label"],
+                        "status": result["repair"]["status"],
+                        "attempts": result["repair"]["attempt_count"],
+                        "repair_count": result["repair"]["repair_count"],
+                        "conservative_fallback": result["repair"][
+                            "conservative_fallback"
+                        ],
+                        "unresolved": result["repair"]["unresolved"],
+                    }
+                    for result in floor_results
+                ],
+            },
+            "warnings": list(dict.fromkeys(warning_items)),
+            "limitations": limitation_items,
+        }
+        self.write_manifest(output_root, manifest_payload)
+
+        return {
+            "assets": assets,
+            "floors": floors,
+            "room_count": len(merged_rooms),
+            "room_types": [
+                {
+                    "room_id": entry["room_id"],
+                    "name": entry["name"],
+                    "room_type": entry["room_type"],
+                    "source": "user",
+                    "floor": entry["floor"],
+                    "floor_label": entry["floor_label"],
+                }
+                for entry in merged_rooms
+            ],
+            "furniture_count": len(merged_furniture),
+            "warnings": list(dict.fromkeys(warning_items)),
+            "limitations": limitation_items,
+        }
 
     async def reconstruct(self, job_id: str):
         """Reconstruction stage after the user has confirmed every assignment."""
@@ -2273,6 +3579,12 @@ async def health_check():
         furnishing = {}
 
     poppler = shutil.which("pdftoppm") is not None
+    try:
+        import pymupdf  # noqa: F401
+
+        pymupdf_version = getattr(pymupdf, "__version__", "installed")
+    except ImportError:
+        pymupdf_version = None
     return {
         "status": "healthy",
         "dependencies": {
@@ -2282,7 +3594,10 @@ async def health_check():
             "mapbox_earcut": earcut_version,
             "pdf2image": pdf2image_version,
             "poppler": poppler,
-            "pdf_floor_plans": bool(pdf2image_version and poppler),
+            "pymupdf": pymupdf_version,
+            "pdf_floor_plans": bool(
+                (pdf2image_version and poppler) or pymupdf_version
+            ),
             "pycolmap": pycolmap_version,
             "photogrammetry_available": pycolmap_version is not None,
             "photogrammetry_cuda": colmap_cuda,
@@ -2432,7 +3747,8 @@ def _write_review_upload(job_id: str, upload: UploadFile, prefix: str) -> Dict:
 async def create_reconstruction(
     background_tasks: BackgroundTasks,
     project_name: str = Form(...),
-    floor_plan: UploadFile = File(...),
+    floor_plan: Optional[UploadFile] = File(None),
+    floor_plans: Optional[List[UploadFile]] = File(None),
     num_floors: int = Form(1),
     known_width: Optional[float] = Form(None),
     known_length: Optional[float] = Form(None),
@@ -2448,8 +3764,11 @@ async def create_reconstruction(
         property_id = f"prop-{uuid.uuid4().hex[:12]}"
     if len(property_id) > 120:
         raise HTTPException(status_code=400, detail="Property ID must be 120 characters or fewer")
-    if num_floors < 1 or num_floors > 5:
-        raise HTTPException(status_code=400, detail="Number of floors must be between 1 and 5")
+    if num_floors < 1 or num_floors > MAX_FLOORS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Number of floors must be between 1 and {MAX_FLOORS}",
+        )
     if known_width is not None and not (2 <= known_width <= 100):
         raise HTTPException(status_code=400, detail="Known width must be between 2 and 100 metres")
     if known_length is not None and not (2 <= known_length <= 100):
@@ -2457,33 +3776,68 @@ async def create_reconstruction(
     style = _validated_style(style)
     ignored_photos = len(photos or [])
 
-    allowed_plan = {".png", ".jpg", ".jpeg", ".pdf"}
-    plan_ext = Path(floor_plan.filename or "floor_plan").suffix.lower()
-    if plan_ext not in allowed_plan:
+    uploads = [
+        upload
+        for upload in ([floor_plan] if floor_plan is not None else []) + list(floor_plans or [])
+        if upload is not None and (upload.filename or "").strip()
+    ]
+    if not uploads:
+        raise HTTPException(status_code=400, detail="A floor plan is required")
+    if len(uploads) > MAX_FLOORS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported floor plan format '{plan_ext}'. Allowed: PNG, JPG, JPEG, PDF",
+            detail=f"At most {MAX_FLOORS} floor plans can be reconstructed at once",
         )
+
+    allowed_plan = {".png", ".jpg", ".jpeg", ".pdf"}
+    for upload in uploads:
+        plan_ext = Path(upload.filename or "floor_plan").suffix.lower()
+        if plan_ext not in allowed_plan:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported floor plan format '{plan_ext}'. "
+                "Allowed: PNG, JPG, JPEG, PDF",
+            )
 
     job_id = str(uuid.uuid4())
     job_dir = INPUT_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
-    floor_plan_path = job_dir / f"floor_plan{plan_ext}"
+    stored_plans: List[Dict[str, Any]] = []
     try:
-        saved = 0
-        plan_digest = hashlib.sha256()
-        with open(floor_plan_path, "wb") as handle:
-            for chunk in iter(lambda: floor_plan.file.read(1024 * 1024), b""):
-                saved += len(chunk)
-                if saved > MAX_FLOOR_PLAN_BYTES:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Floor plan too large. Maximum {MAX_FLOOR_PLAN_BYTES // (1024 * 1024)} MB",
-                    )
-                plan_digest.update(chunk)
-                handle.write(chunk)
-        if floor_plan_path.stat().st_size == 0:
-            raise HTTPException(status_code=400, detail="Floor plan file is empty")
+        for index, upload in enumerate(uploads):
+            plan_ext = Path(upload.filename or "floor_plan").suffix.lower()
+            stored_path = job_dir / f"floor_plan_{index}{plan_ext}"
+            saved = 0
+            plan_digest = hashlib.sha256()
+            with open(stored_path, "wb") as handle:
+                for chunk in iter(lambda: upload.file.read(1024 * 1024), b""):
+                    saved += len(chunk)
+                    if saved > MAX_FLOOR_PLAN_BYTES:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=(
+                                f"{upload.filename or 'Floor plan'} is too large. "
+                                f"Maximum {MAX_FLOOR_PLAN_BYTES // (1024 * 1024)} MB per floor"
+                            ),
+                        )
+                    plan_digest.update(chunk)
+                    handle.write(chunk)
+            if stored_path.stat().st_size == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{upload.filename or 'Floor plan'} is empty",
+                )
+            stored_plans.append(
+                {
+                    "floor_index": index,
+                    "floor_label": _floor_label(index),
+                    "original_filename": upload.filename,
+                    "stored_filename": stored_path.name,
+                    "path": str(stored_path),
+                    "size_bytes": stored_path.stat().st_size,
+                    "sha256": plan_digest.hexdigest(),
+                }
+            )
     except HTTPException:
         shutil.rmtree(job_dir, ignore_errors=True)
         raise
@@ -2491,6 +3845,7 @@ async def create_reconstruction(
         shutil.rmtree(job_dir, ignore_errors=True)
         raise HTTPException(status_code=500, detail=f"Failed to store uploads: {exc}") from exc
 
+    floor_plan_path = Path(stored_plans[0]["path"])
     known_dimensions = {}
     if known_width:
         known_dimensions["width_meters"] = known_width
@@ -2499,14 +3854,18 @@ async def create_reconstruction(
     inputs = {
         "property_id": property_id,
         "floor_plan": {
-            "original_filename": floor_plan.filename,
-            "stored_filename": floor_plan_path.name,
-            "size_bytes": floor_plan_path.stat().st_size,
-            "sha256": plan_digest.hexdigest(),
+            "original_filename": stored_plans[0]["original_filename"],
+            "stored_filename": stored_plans[0]["stored_filename"],
+            "size_bytes": stored_plans[0]["size_bytes"],
+            "sha256": stored_plans[0]["sha256"],
         },
+        "floor_plans": [
+            {key: value for key, value in plan.items() if key != "path"}
+            for plan in stored_plans
+        ],
         "photos": [],
         "photos_ignored": ignored_photos,
-        "num_floors": num_floors,
+        "num_floors": len(stored_plans),
         "known_dimensions": known_dimensions,
     }
 
@@ -2521,9 +3880,11 @@ async def create_reconstruction(
         "updated_at": now,
         "error": None,
         "project_name": project_name,
-        "floor_plan_filename": floor_plan.filename,
+        "floor_plan_filename": stored_plans[0]["original_filename"],
+        "floor_plan_filenames": [plan["original_filename"] for plan in stored_plans],
         "photo_count": 0,
-        "num_floors": num_floors,
+        "num_floors": len(stored_plans),
+        "floor_count": len(stored_plans),
         "known_dimensions": known_dimensions,
         "inputs": inputs,
         "stage_records": [],
@@ -2534,6 +3895,7 @@ async def create_reconstruction(
         "retry_count": 0,
         "cancel_requested": False,
         "floor_plan_path": str(floor_plan_path),
+        "floor_plan_paths": [plan["path"] for plan in stored_plans],
         "photo_paths": [],
         "review_required": True,
         "assignments_confirmed": False,
@@ -2553,7 +3915,8 @@ async def create_reconstruction(
         _write_jobs_unlocked(jobs)
     log_event(
         job_id,
-        f"Job created for '{project_name}' (floor-plan-only, style {style})"
+        f"Job created for '{project_name}' (floor-plan-only, "
+        f"{len(stored_plans)} floor plan(s), style {style})"
         + (
             f"; {ignored_photos} photo(s) were supplied but are not required and "
             "were not stored"
@@ -2566,7 +3929,7 @@ async def create_reconstruction(
         get_pipeline().prepare_floor_plan,
         job_id,
         str(floor_plan_path),
-        num_floors,
+        len(stored_plans),
         known_width,
         known_length,
     )
@@ -2873,6 +4236,20 @@ async def get_room_types(job_id: str):
             }
         )
     labels = review.get("room_type_labels") or ROOM_TYPE_LABELS
+    floors = []
+    for entry in floor_plan_result.get("floors") or []:
+        index = int(entry.get("index", 0))
+        floors.append(
+            {
+                **entry,
+                "preview_url": (
+                    f"/reconstructions/{job_id}/floor-plans/{index}/preview"
+                ),
+                "normalized_plan_url": (
+                    f"/reconstructions/{job_id}/floor-plans/{index}/preview"
+                ),
+            }
+        )
     return {
         "job_id": job_id,
         "status": review.get("status"),
@@ -2881,6 +4258,9 @@ async def get_room_types(job_id: str):
         "requires_confirmation": bool(review.get("requires_confirmation")),
         "source": review.get("source"),
         "notes": review.get("notes"),
+        "multi_floor": bool(floor_plan_result.get("multi_floor")),
+        "floor_count": len(floors) or 1,
+        "floors": floors,
         "footprint_m": floor_plan_result.get("footprint_m") or review.get("footprint_m"),
         "footprint_px": floor_plan_result.get("footprint_px"),
         "image_dimensions": floor_plan_result.get("image_dimensions"),
@@ -3197,6 +4577,29 @@ async def get_scene_metadata(job_id: str):
             status_code=500,
             detail=f"Scene assets are missing or malformed: {exc}",
         ) from exc
+    floors = []
+    for entry in metadata.get("floors") or []:
+        index = int(entry.get("index", 0))
+        floor_dir = output_dir / "floors" / f"floor_{index}"
+        try:
+            floor_collision = json.loads((floor_dir / "collision.json").read_text())
+            floor_graph = json.loads((floor_dir / "room_graph.json").read_text())
+            floor_metadata = json.loads((floor_dir / "metadata.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        floors.append(
+            {
+                "index": index,
+                "label": entry.get("label") or _floor_label(index),
+                "y_offset": entry.get("y_offset", round(index * FLOOR_HEIGHT_M, 3)),
+                "model_url": (
+                    f"/reconstructions/{job_id}/assets/floors/floor_{index}/scene.glb"
+                ),
+                "collision": floor_collision,
+                "room_graph": floor_graph,
+                "metadata": floor_metadata,
+            }
+        )
     return {
         "job_id": job_id,
         "property_id": job.get("property_id"),
@@ -3206,6 +4609,9 @@ async def get_scene_metadata(job_id: str):
         "room_graph": room_graph,
         "metadata": metadata,
         "manifest": manifest,
+        "floors": floors,
+        "num_floors": len(floors) or int(metadata.get("num_floors") or 1),
+        "floor_height": metadata.get("storey_height") or FLOOR_HEIGHT_M,
         "room_types": manifest.get("room_types") or metadata.get("room_types") or [],
         "room_assignments": manifest.get("room_assignments", []),
         "furniture": (furniture or {}).get("items") or [],
@@ -3447,6 +4853,68 @@ async def get_floor_plan_preview(job_id: str):
     return FileResponse(plan_path, media_type=media_types.get(suffix))
 
 
+@app.get("/reconstructions/{job_id}/floor-plans/{floor_index}/preview")
+async def get_floor_plan_floor_preview(job_id: str, floor_index: int):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if floor_index < 0:
+        raise HTTPException(status_code=404, detail="Floor plan preview not available")
+    candidates = [
+        GEOMETRY_DIR
+        / job_id
+        / "floors"
+        / f"floor_{floor_index}"
+        / "floor_plan_normalized.png",
+    ]
+    if floor_index == 0:
+        candidates.append(GEOMETRY_DIR / job_id / "floor_plan_normalized.png")
+    for path in candidates:
+        if path.is_file():
+            return FileResponse(path, media_type="image/png")
+
+    source = None
+    plan_path = GEOMETRY_DIR / job_id / "floor_plan.json"
+    if plan_path.is_file():
+        try:
+            plan = json.loads(plan_path.read_text())
+            for entry in plan.get("floors") or []:
+                if int(entry.get("index", -1)) == floor_index:
+                    source = entry
+                    break
+        except (OSError, json.JSONDecodeError):
+            source = None
+    uploads = [
+        Path(path)
+        for path in (
+            job.get("floor_plan_paths")
+            or ([job.get("floor_plan_path")] if job.get("floor_plan_path") else [])
+        )
+        if path and Path(path).is_file()
+    ]
+    if source is not None and source.get("source_filename"):
+        upload = next(
+            (path for path in uploads if path.name == source["source_filename"]),
+            None,
+        )
+    else:
+        upload = uploads[floor_index] if floor_index < len(uploads) else None
+    if upload is None:
+        raise HTTPException(status_code=404, detail="Floor plan preview not available")
+    suffix = upload.suffix.lower()
+    if suffix == ".pdf":
+        page = int((source or {}).get("page_index") or 0)
+        raster = upload.parent / f"{upload.stem}_page{page + 1}.png"
+        if raster.is_file():
+            return FileResponse(raster, media_type="image/png")
+        raise HTTPException(
+            status_code=404,
+            detail="The PDF page has not been rasterised yet; wait for parsing to finish",
+        )
+    media_types = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+    return FileResponse(upload, media_type=media_types.get(suffix))
+
+
 @app.get("/reconstructions/{job_id}/diagnostics")
 async def get_reconstruction_diagnostics(job_id: str):
     job = get_job(job_id)
@@ -3616,7 +5084,7 @@ async def list_reconstruction_assets(job_id: str):
     return {"job_id": job_id, "assets": assets}
 
 
-@app.get("/reconstructions/{job_id}/assets/{asset_name}")
+@app.get("/reconstructions/{job_id}/assets/{asset_name:path}")
 async def get_reconstruction_asset(job_id: str, asset_name: str):
     job = get_job(job_id)
     if not job:
