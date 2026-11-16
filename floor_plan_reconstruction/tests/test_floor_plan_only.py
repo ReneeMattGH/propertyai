@@ -781,6 +781,18 @@ def test_l_shaped_living_room_keeps_furniture_inside_the_polygon():
             {"dining_table_4", "dining_table_6"},
         ),
         ("entrance", [0, 0, 2.4, 2.8], {"shoe_cabinet"}, set()),
+        (
+            "pooja",
+            [0, 0, 2.6, 2.4],
+            {"pooja_mandir"},
+            {"prayer_mat", "pooja_lamp"},
+        ),
+        (
+            "gym",
+            [0, 0, 4.5, 5.5],
+            {"gym_treadmill"},
+            {"gym_bench", "dumbbell_rack"},
+        ),
     ],
 )
 def test_required_furniture_categories_per_room_type(
@@ -797,6 +809,27 @@ def test_required_furniture_categories_per_room_type(
         assert assets & one_of, assets
     assert furnishing["items"]
     assert all(item["room_id"] == 0 for item in furnishing["items"])
+
+
+def test_pooja_and_gym_are_valid_room_types():
+    from room_types import ROOM_TYPE_LABELS, ROOM_TYPES, infer_room_types
+
+    assert {"pooja", "gym"} <= set(ROOM_TYPES)
+    assert ROOM_TYPE_LABELS["pooja"] == "Pooja / prayer room"
+    assert ROOM_TYPE_LABELS["gym"] == "Gym / fitness room"
+
+    rooms = [
+        synthetic_room(0, [0, 0, 5.0, 5.0]),
+        synthetic_room(1, [0, 0, 2.6, 2.4]),
+    ]
+    review = infer_room_types(rooms, explicit={0: "gym", 1: "pooja"})
+    by_id = {entry["room_id"]: entry for entry in review["rooms"]}
+
+    assert by_id[0]["room_type"] == "gym"
+    assert by_id[1]["room_type"] == "pooja"
+    assert by_id[0]["confidence"] == 1.0
+    assert by_id[1]["confidence"] == 1.0
+    assert review["requires_confirmation"] is False
 
 
 def test_furnishing_is_deterministic_and_never_blocks_doorways():

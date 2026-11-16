@@ -24,6 +24,8 @@ ROOM_TYPES: Tuple[str, ...] = (
     "entrance",
     "hallway",
     "balcony",
+    "pooja",
+    "gym",
     "unknown",
 )
 
@@ -36,6 +38,8 @@ ROOM_TYPE_LABELS: Dict[str, str] = {
     "entrance": "Entrance / foyer",
     "hallway": "Hallway",
     "balcony": "Balcony",
+    "pooja": "Pooja / prayer room",
+    "gym": "Gym / fitness room",
     "unknown": "Unspecified",
 }
 
@@ -48,6 +52,8 @@ DEFAULT_NAME_BY_TYPE: Dict[str, str] = {
     "entrance": "Entrance",
     "hallway": "Hallway",
     "balcony": "Balcony",
+    "pooja": "Pooja Room",
+    "gym": "Gym",
     "unknown": "Unspecified Room",
 }
 

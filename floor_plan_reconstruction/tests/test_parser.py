@@ -7,7 +7,7 @@ import uuid
 import numpy as np
 from PIL import Image
 
-from improved_floor_plan_parser import ImprovedFloorPlanParser
+from improved_floor_plan_parser import ImprovedFloorPlanParser, label_room_type
 
 
 def run(coro):
@@ -152,3 +152,13 @@ def test_usable_rooms_survive_the_sliver_filter():
 
     assert [room["id"] for room in kept] == [0, 1]
     assert warnings == []
+
+
+def test_printed_labels_map_pooja_and_gym_rooms():
+    assert label_room_type("POOJA") == "pooja"
+    assert label_room_type("PUJA ROOM") == "pooja"
+    assert label_room_type("PRAYER ROOM") == "pooja"
+    assert label_room_type("GYM ROOM") == "gym"
+    assert label_room_type("GYMNASIUM") == "gym"
+    assert label_room_type("MASTER BED") == "bedroom"
+    assert label_room_type("TOILET") == "bathroom"

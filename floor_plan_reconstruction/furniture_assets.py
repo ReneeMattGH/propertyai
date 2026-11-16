@@ -912,6 +912,111 @@ def _build_art_frame(style: str) -> List[Part]:
 
 
 # ---------------------------------------------------------------------------
+# Pooja / prayer room
+# ---------------------------------------------------------------------------
+def _build_pooja_mandir(style: str) -> List[Part]:
+    parts: List[Part] = []
+    width, depth = 0.95, 0.45
+    _box(parts, "plinth", "wood_dark", (width, 0.08, depth), (0, 0.04, 0))
+    _box(parts, "cabinet", "wood", (0.85, 0.55, 0.4), (0, 0.355, 0))
+    _box(parts, "counter", "wood_light", (0.9, 0.04, 0.42), (0, 0.65, 0))
+    _box(parts, "niche_floor", "wood_light", (0.74, 0.03, 0.34), (0, 0.685, -0.02))
+    _box(parts, "back_panel", "wood_dark", (0.8, 0.62, 0.04), (0, 1.0, -depth / 2 + 0.06))
+    _box(parts, "pilaster_left", "wood", (0.06, 0.62, 0.36), (-0.37, 1.0, 0))
+    _box(parts, "pilaster_right", "wood", (0.06, 0.62, 0.36), (0.37, 1.0, 0))
+    _box(parts, "cornice", "wood_dark", (width, 0.07, depth), (0, 1.345, 0))
+    _ellipsoid(parts, "dome", "wood", (0.64, 0.3, 0.4), (0, 1.51, 0), subdivisions=3)
+    _ellipsoid(parts, "finial", "metal", (0.05, 0.05, 0.05), (0, 1.67, 0))
+    _ellipsoid(parts, "deity", "metal", (0.16, 0.26, 0.12), (0.0, 0.87, -0.08))
+    _cylinder(parts, "offering_bowl", "metal", 0.07, 0.05, (0, 0.725, 0.1), sections=16)
+    return parts
+
+
+def _build_pooja_lamp(style: str) -> List[Part]:
+    parts: List[Part] = []
+    _cylinder(parts, "base", "metal", 0.08, 0.03, (0, 0.015, 0), sections=18)
+    _cylinder(parts, "stem", "metal", 0.015, 0.8, (0, 0.43, 0), sections=10)
+    _cylinder(parts, "bowl", "metal", 0.09, 0.06, (0, 0.86, 0), sections=18)
+    _ellipsoid(parts, "flame", "light", (0.05, 0.09, 0.05), (0, 0.9, 0))
+    return parts
+
+
+def _build_prayer_mat(style: str) -> List[Part]:
+    parts: List[Part] = []
+    _box(parts, "border", "fabric_dark", (0.62, 0.012, 0.95), (0, 0.006, 0))
+    _box(parts, "mat", "cushion", (0.56, 0.02, 0.88), (0, 0.012, 0))
+    return parts
+
+
+# ---------------------------------------------------------------------------
+# Gym / fitness room
+# ---------------------------------------------------------------------------
+def _build_treadmill(style: str) -> List[Part]:
+    parts: List[Part] = []
+    _box(parts, "deck", "metal_dark", (0.78, 0.18, 1.75), (0, 0.2, 0.05))
+    _box(parts, "belt", "screen", (0.6, 0.04, 1.5), (0, 0.31, 0.05))
+    _box(parts, "rail_left", "metal", (0.08, 0.06, 1.6), (-0.36, 0.34, 0.05))
+    _box(parts, "rail_right", "metal", (0.08, 0.06, 1.6), (0.36, 0.34, 0.05))
+    _box(parts, "post_left", "metal_dark", (0.07, 1.0, 0.07), (-0.32, 0.85, -0.82))
+    _box(parts, "post_right", "metal_dark", (0.07, 1.0, 0.07), (0.32, 0.85, -0.82))
+    _box(parts, "console", "metal", (0.8, 0.22, 0.3), (0, 1.22, -0.78))
+    _box(parts, "screen", "screen", (0.36, 0.16, 0.02), (0, 1.22, -0.625))
+    return parts
+
+
+def _build_weight_bench(style: str) -> List[Part]:
+    parts: List[Part] = []
+    _legs(parts, "metal_dark", 1.0, 0.44, 0.35, inset=0.14, radius=0.022)
+    _box(parts, "frame", "metal_dark", (1.05, 0.05, 0.34), (0, 0.375, 0))
+    _cushion(parts, "pad", "cushion", (1.15, 0.12, 0.38), (0, 0.43, 0))
+    return parts
+
+
+def _build_dumbbell_rack(style: str) -> List[Part]:
+    parts: List[Part] = []
+    _box(parts, "upright_left", "metal_dark", (0.08, 1.1, 0.4), (-0.51, 0.55, 0))
+    _box(parts, "upright_right", "metal_dark", (0.08, 1.1, 0.4), (0.51, 0.55, 0))
+    for tier, height in enumerate((0.45, 0.93)):
+        _box(parts, f"rail_{tier}", "metal", (1.02, 0.05, 0.36), (0, height, 0))
+        for index, along in enumerate((-0.3, 0.0, 0.3)):
+            _cylinder(
+                parts,
+                f"bar_{tier}_{index}",
+                "metal_dark",
+                0.018,
+                0.26,
+                (along, height + 0.09, 0),
+                axis="z",
+                sections=10,
+            )
+            for side in (-1, 1):
+                _cylinder(
+                    parts,
+                    f"weight_{tier}_{index}_{'a' if side < 0 else 'b'}",
+                    "metal",
+                    0.075,
+                    0.045,
+                    (along, height + 0.09, side * 0.115),
+                    axis="z",
+                    sections=14,
+                )
+    return parts
+
+
+def _build_yoga_mat(style: str) -> List[Part]:
+    parts: List[Part] = []
+    _box(parts, "mat", "accent", (0.64, 0.015, 1.76), (0, 0.008, 0))
+    return parts
+
+
+def _build_gym_mirror(style: str) -> List[Part]:
+    parts: List[Part] = []
+    _box(parts, "frame", "metal_dark", (1.2, 1.7, 0.04), (0, 0, 0))
+    _box(parts, "glass", "glass", (1.1, 1.6, 0.012), (0, 0, 0.022))
+    return parts
+
+
+# ---------------------------------------------------------------------------
 # Asset registry
 # ---------------------------------------------------------------------------
 ASSETS: Dict[str, AssetSpec] = {
@@ -1021,6 +1126,30 @@ ASSETS: Dict[str, AssetSpec] = {
     ),
     "art_frame": AssetSpec(
         "art_frame", "Wall art", (0.64, 0.48, 0.04), _build_art_frame, collision=False, category="decor"
+    ),
+    "pooja_mandir": AssetSpec(
+        "pooja_mandir", "Pooja mandir", (0.95, 1.7, 0.45), _build_pooja_mandir, category="storage"
+    ),
+    "pooja_lamp": AssetSpec(
+        "pooja_lamp", "Pooja lamp", (0.24, 0.95, 0.24), _build_pooja_lamp, collision=False, category="lighting"
+    ),
+    "prayer_mat": AssetSpec(
+        "prayer_mat", "Prayer mat", (0.62, 0.025, 0.95), _build_prayer_mat, collision=False, category="decor"
+    ),
+    "gym_treadmill": AssetSpec(
+        "gym_treadmill", "Treadmill", (0.85, 1.35, 1.95), _build_treadmill, category="fitness"
+    ),
+    "gym_bench": AssetSpec(
+        "gym_bench", "Weight bench", (1.25, 0.5, 0.5), _build_weight_bench, category="fitness"
+    ),
+    "dumbbell_rack": AssetSpec(
+        "dumbbell_rack", "Dumbbell rack", (1.1, 1.15, 0.45), _build_dumbbell_rack, category="fitness"
+    ),
+    "yoga_mat": AssetSpec(
+        "yoga_mat", "Yoga mat", (0.66, 0.02, 1.8), _build_yoga_mat, collision=False, category="decor"
+    ),
+    "gym_mirror": AssetSpec(
+        "gym_mirror", "Gym mirror", (1.2, 1.7, 0.05), _build_gym_mirror, collision=False, category="decor"
     ),
 }
 

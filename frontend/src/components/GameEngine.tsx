@@ -57,6 +57,8 @@ const FOCAL_ASSETS = [
   'tv_stand',
   'armchair',
   'coffee_table',
+  'pooja_mandir',
+  'gym_treadmill',
 ]
 
 type Phase = 'connecting' | 'downloading' | 'building' | 'ready' | 'error'

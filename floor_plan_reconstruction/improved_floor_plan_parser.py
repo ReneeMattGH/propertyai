@@ -193,6 +193,8 @@ def extract_pdf_plan_labels(path: Path, page_index: int = 0) -> Dict:
 def label_room_type(name: str) -> Optional[str]:
     lowered = name.lower()
     rules = (
+        ("pooja", ("pooja", "puja", "prayer", "mandir", "mandapam")),
+        ("gym", ("gym", "gymnasium", "workout", "fitness")),
         ("kitchen", ("kitchen", "pantry")),
         ("bathroom", ("toilet", "bath", "wc", "washroom")),
         ("bedroom", ("bed", "bedroom")),

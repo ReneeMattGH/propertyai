@@ -38,7 +38,7 @@ INFER_DOOR_WIDTH_M = 0.9
 MAX_INFERRED_CONNECTIONS = 6
 
 WET_TYPES = {"bathroom"}
-PRIVATE_TYPES = {"bedroom"}
+PRIVATE_TYPES = {"bedroom", "pooja", "gym"}
 CIRCULATION_TYPES = {"hallway", "entrance"}
 PUBLIC_TYPES = {"living_room", "dining_room", "kitchen", "balcony"}
 

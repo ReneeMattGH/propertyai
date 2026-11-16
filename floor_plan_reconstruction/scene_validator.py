@@ -51,7 +51,7 @@ REQUIRED_FURNISHED_TYPES = {
     "dining_room",
     "entrance",
 }
-FURNISHABLE_TYPES = REQUIRED_FURNISHED_TYPES | {"balcony"}
+FURNISHABLE_TYPES = REQUIRED_FURNISHED_TYPES | {"balcony", "pooja", "gym"}
 
 
 class SceneValidationError(Exception):

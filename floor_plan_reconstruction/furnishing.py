@@ -1122,6 +1122,81 @@ def _plan_balcony(layout: RoomLayout) -> None:
         layout.notes.append("Balcony left clear because no furniture fitted without blocking access.")
 
 
+def _plan_pooja(layout: RoomLayout) -> None:
+    mandir, reason = layout.place_on_wall("pooja_mandir", gap=0.04, front_reserve=0.55)
+    if not mandir:
+        layout.skip("pooja_mandir", reason)
+        layout.notes.append("No wall run fits a pooja mandir, so the room was left clear.")
+    else:
+        layout.place_in_front(
+            mandir,
+            "prayer_mat",
+            0.0,
+            label="Prayer mat",
+            gap=0.02,
+        )
+    lamp, lamp_reason = layout.place_on_wall(
+        "pooja_lamp",
+        sides=layout.side_order(exclude=[mandir["wall"]] if mandir else ()),
+        gap=0.06,
+    )
+    if not lamp:
+        layout.skip("pooja_lamp", lamp_reason, required=False)
+
+
+def _plan_gym(layout: RoomLayout) -> None:
+    area = float(layout.room.get("area_m2") or 0)
+    used_walls: List[str] = []
+    treadmill, reason = layout.place_on_wall(
+        "gym_treadmill",
+        gap=0.1,
+        front_reserve=1.1,
+    )
+    if treadmill:
+        used_walls.append(treadmill["wall"])
+    else:
+        layout.skip("gym_treadmill", reason)
+
+    rack, rack_reason = layout.place_on_wall(
+        "dumbbell_rack",
+        sides=layout.side_order(exclude=used_walls),
+        gap=0.08,
+        front_reserve=0.7,
+    )
+    if rack:
+        used_walls.append(rack["wall"])
+    else:
+        layout.skip("dumbbell_rack", rack_reason, required=False)
+
+    bench, bench_reason = layout.place_on_wall(
+        "gym_bench",
+        sides=layout.side_order(exclude=used_walls),
+        gap=0.1,
+        front_reserve=0.6,
+    )
+    if bench:
+        used_walls.append(bench["wall"])
+        layout.place_in_front(bench, "yoga_mat", 0.25, label="Yoga mat", gap=0.02)
+    else:
+        layout.skip("gym_bench", bench_reason, required=False)
+
+    if area >= 6.0:
+        mirror_wall = next(
+            (side for side in layout.side_order() if side not in used_walls),
+            None,
+        )
+        if mirror_wall:
+            along = layout._along_candidates(mirror_wall, 1.2, None)
+            if along:
+                layout.place_wall_decor(
+                    "gym_mirror",
+                    wall=mirror_wall,
+                    target_along=along[0],
+                    label="Gym mirror",
+                    y=1.05,
+                )
+
+
 def _plan_unknown(layout: RoomLayout) -> None:
     layout.notes.append(
         "Room type is unspecified, so no furniture was placed. Choose a room type and regenerate to furnish it."
@@ -1137,6 +1212,8 @@ PLANNERS = {
     "entrance": _plan_entrance,
     "hallway": _plan_hallway,
     "balcony": _plan_balcony,
+    "pooja": _plan_pooja,
+    "gym": _plan_gym,
     "unknown": _plan_unknown,
 }
 
